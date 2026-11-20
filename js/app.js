@@ -4,7 +4,7 @@ import { renderGrid, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from
 import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
-import { scadenzaRichieste } from './richieste.js';
+import { scadenzaRichieste, decisioneRichieste, giornoLibero, weekendPredefinito } from './richieste.js';
 
 const $ = (id) => document.getElementById(id);
 const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
@@ -128,7 +128,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v18`;
+  $('utente').textContent = `${stato.utente.name} · v20`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -160,9 +160,18 @@ function mostraMessaggio(t) { const p = $('messaggio'); p.textContent = t || '';
 
 // le richieste ancora senza risposta compaiono sul foglio (tratteggiate; gialle se critiche)
 function richiestePerFoglio() {
-  return stato.richieste.filter((r) => r.status === 'pending').map((r) => ({
-    staff_id: r.staff_id, date: r.date, kind: r.kind, requested: r.kind !== 'RR', pending: true, critica: (r.avvisi || []).length > 0,
-  }));
+  const out = [];
+  for (const r of stato.richieste.filter((x) => x.status === 'pending')) {
+    const critica = (r.avvisi || []).length > 0;
+    if (r.kind === 'F' || r.kind === 'PERM') {
+      // ferie e permessi: una casella per giorno, le domeniche in mezzo sono il trattino
+      for (let d = new Date(`${r.date}T00:00:00Z`), fine = new Date(`${r.last_date || r.date}T00:00:00Z`); d <= fine; d.setUTCDate(d.getUTCDate() + 1)) {
+        const giorno = d.toISOString().slice(0, 10);
+        out.push({ staff_id: r.staff_id, date: giorno, kind: giornoLibero(stato.dati?.staff?.find((p) => p.id === r.staff_id), giorno) ? 'FS' : r.kind, requested: false, pending: true, critica });
+      }
+    } else out.push({ staff_id: r.staff_id, date: r.date, kind: r.kind, requested: r.kind !== 'RR', pending: true, critica });
+  }
+  return out;
 }
 
 // perché le richieste del mese guardato sono chiuse (scadute oppure non ancora aperte)
@@ -213,8 +222,9 @@ function disegna() {
   disegnaMalattie();
 
   $('legenda').innerHTML = righeLegenda(events, stato.y, stato.m, shifts).map((r) => `<li class="${r.cls}">${r.html}</li>`).join('');
+  const conRichieste = [...shifts, ...richiestePerFoglio()];
   $('foglio').innerHTML = renderGrid({
-    year: stato.y, month: stato.m, staff, shifts: [...shifts, ...richiestePerFoglio()], events,
+    year: stato.y, month: stato.m, staff, shifts: [...conRichieste, ...weekendPredefinito(staff, stato.y, stato.m, conRichieste)], events,
     editable: isCoord() && stato.modifica,
     evidenzia: isCoord() ? null : stato.utente.staffId,          // gli operatori vedono la propria riga riquadrata in blu
   });
@@ -261,7 +271,7 @@ $('btn-pdf').onclick = async () => {
     const { month, staff, shifts, events } = stato.dati;
     if (!logoPdf) logoPdf = leggiLogo();
     const logo = await logoPdf;
-    const bytes = creaPdf({ year: stato.y, month: stato.m, staff, shifts, events, servizio: CONFIG.SERVIZIO, note: month.notes || '', logo, evidenzia: isCoord() ? null : stato.utente.staffId });
+    const bytes = creaPdf({ year: stato.y, month: stato.m, staff, shifts: [...shifts, ...weekendPredefinito(staff, stato.y, stato.m, shifts)], events, servizio: CONFIG.SERVIZIO, note: month.notes || '', logo, evidenzia: isCoord() ? null : stato.utente.staffId });
     const nome = nomeFilePdf(stato.y, stato.m);
     const file = new File([bytes], nome, { type: 'application/pdf' });
     const touch = window.matchMedia('(pointer: coarse)').matches;
@@ -367,10 +377,12 @@ $('notifiche-lista').addEventListener('click', async (ev) => {
 $('notifiche-tutte').onclick = () => segnaLette(stato.notifiche.map((x) => x.id));
 
 // ------------------------------------------------------------ richieste di riposo o di turno
-const TIPO_RICHIESTA = { RR: 'Riposo', M: 'Mattina', P: 'Pomeriggio', N: 'Notte' };
+const TIPO_RICHIESTA = { RR: 'Riposo', M: 'Mattina', P: 'Pomeriggio', N: 'Notte', F: 'Ferie', PERM: 'Permesso' };
+const quandoRichiesta = (r) => (r.last_date && r.last_date > r.date ? `dal ${dataEstesa(r.date)} al ${dataEstesa(r.last_date)}` : dataEstesa(r.date));
 const STATO_RICHIESTA = { pending: 'In attesa', accepted: 'Accettata', rejected: 'Rifiutata' };
 const MAX_RICHIESTE = 3;
 const scadenzaTesto = (y, m) => { const sc = scadenzaRichieste(y, m); return `${sc.slice(8, 10)}/${sc.slice(5, 7)}/${sc.slice(0, 4)}`; };
+const decisioneTesto = (y, m) => { const sc = decisioneRichieste(y, m); return `${sc.slice(8, 10)}/${sc.slice(5, 7)}/${sc.slice(0, 4)}`; };
 let ricMeseOp = null;                                  // mese scelto dall'operatore: { year, month, scadenza }
 function ricErrore(t) { $('ric-err').textContent = t || ''; $('ric-err').hidden = !t; }
 const ricMese = () => (isCoord() ? { year: stato.y, month: stato.m } : (ricMeseOp || { year: stato.y, month: stato.m }));
@@ -392,10 +404,12 @@ async function apriRichieste(dataScelta = null) {
     if (dataScelta && ricMeseOp && ricMeseOp.year === +dataScelta.slice(0, 4) && ricMeseOp.month === +dataScelta.slice(5, 7)) $('ric-data').value = dataScelta;
     $('ric-op').hidden = !mesi.length;
     $('ric-testo').textContent = mesi.length
-      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese. Ferie e permessi sono un'altra cosa. Le richieste di un mese si aprono il 1 ottobre dell'anno prima e si chiudono a mezzanotte del 20 del mese prima. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Le richieste non esaminate entro il 20 valgono come accettate. Qui vedi anche quelle dei colleghi.`
+      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese; ferie e permessi sono a parte, si chiedono da un giorno a un altro (le domeniche in mezzo diventano da sole il trattino). Le richieste di un mese si aprono il 1 ottobre dell'anno prima e vanno inviate entro mezzanotte del 20 del mese prima; poi Marie ha tempo fino a mezzanotte del 21 per rispondere. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Se Marie non risponde entro la mezzanotte del 21 la richiesta vale come accettata. Qui vedi anche quelle dei colleghi.`
       : 'Per questo mese le richieste sono chiuse: si possono fare dal 1 ottobre dell\'anno prima fino a mezzanotte del 20 del mese prima.';
   }
   await disegnaRichieste();
+  $('ric-fine').value = $('ric-data').value;        // ogni volta si riparte da un solo giorno
+  campiRichiesta();
   if (!$('dlg-richieste').open) $('dlg-richieste').showModal();
 }
 
@@ -407,17 +421,17 @@ async function disegnaRichieste() {
   try { righe = await stato.be.elencaRichieste(mese.year, mese.month); } catch (e) { ricErrore(messaggio(e)); }
   if (mese.year === stato.y && mese.month === stato.m) stato.richieste = righe;
   if (isCoord()) {
-    $('ric-stato').innerHTML = `Le richieste di questo mese sono sempre aperte: gli operatori le possono inserire dal 1 ottobre dell'anno prima fino a mezzanotte (ora italiana) del <b>${scadenzaTesto(mese.year, mese.month)}</b>.`;
+    $('ric-stato').innerHTML = `Le richieste di questo mese sono sempre aperte: gli operatori le possono inserire dal 1 ottobre dell'anno prima fino a mezzanotte (ora italiana) del <b>${scadenzaTesto(mese.year, mese.month)}</b>. Tu hai tempo per rispondere fino a mezzanotte del <b>${decisioneTesto(mese.year, mese.month)}</b>: poi quelle ancora in attesa valgono come accettate.`;
     $('ric-apri').hidden = true;
   } else {
     const d0 = `${mese.year}-${pad(mese.month)}-01`, d1 = `${mese.year}-${pad(mese.month)}-${pad(new Date(mese.year, mese.month, 0).getDate())}`;
     $('ric-data').min = d0; $('ric-data').max = d1;
     if (!$('ric-data').value || $('ric-data').value < d0 || $('ric-data').value > d1) $('ric-data').value = d0;
   }
-  const mie = righe.filter((r) => r.staff_id === stato.utente.staffId && ['pending', 'accepted'].includes(r.status)).length;
+  const mie = righe.filter((r) => r.staff_id === stato.utente.staffId && ['pending', 'accepted'].includes(r.status) && ['RR', 'M', 'P', 'N'].includes(r.kind) && r.date.startsWith(`${mese.year}-${pad(mese.month)}-`)).length;
   const ordine = { pending: 0, accepted: 1, rejected: 2 };
   righe = [...righe].sort((a, b) => ordine[a.status] - ordine[b.status] || a.date.localeCompare(b.date));
-  const intest = isCoord() ? '' : `<li class="muted"><span>Hai usato ${mie} richieste su ${MAX_RICHIESTE}. Qui sotto vedi quelle di tutti.</span></li>`;
+  const intest = isCoord() ? '' : `<li class="muted"><span>Hai usato ${mie} richieste su ${MAX_RICHIESTE} (ferie e permessi non contano). Qui sotto vedi quelle di tutti.</span></li>`;
   lista.innerHTML = intest + (righe.length ? righe.map((r) => {
     const mia = r.staff_id === stato.utente.staffId;
     const avvisi = r.avvisi || [];
@@ -433,11 +447,20 @@ async function disegnaRichieste() {
       ? `<input type="text" class="ric-motivo" placeholder="${avvisi.length ? 'Motivazione (obbligatoria: richiesta critica)' : 'Motivazione (obbligatoria se rifiuti)'}" data-motivo-di="${r.id}">` : '';
     const nota = (avvisi.length && r.status !== 'rejected' ? `<span class="avvisi">⚠ ${avvisi.map(esc).join(' ')}</span>` : '')
       + (r.motivo ? `<span class="motivo">Marie: ${esc(r.motivo)}</span>` : '');
-    return `<li class="${critica ? 'critica ' : ''}col"><span class="chi">${chi}${dataEstesa(r.date)} · ${TIPO_RICHIESTA[r.kind]}${nota}</span><span class="stato ${r.status === 'accepted' ? 'accettata' : r.status === 'rejected' ? 'rifiutata' : ''}">${STATO_RICHIESTA[r.status]}</span>${azioni}${motivoIn}</li>`;
+    return `<li class="${critica ? 'critica ' : ''}col"><span class="chi">${chi}${TIPO_RICHIESTA[r.kind]} · ${quandoRichiesta(r)}${nota}</span><span class="stato ${r.status === 'accepted' ? 'accettata' : r.status === 'rejected' ? 'rifiutata' : ''}">${STATO_RICHIESTA[r.status]}</span>${azioni}${motivoIn}</li>`;
   }).join('') : '<li class="muted"><span>Nessuna richiesta per questo mese.</span></li>');
   $('btn-richieste').textContent = isCoord() && stato.richieste.some((r) => r.status === 'pending') ? `Richieste (${stato.richieste.filter((r) => r.status === 'pending').length})` : 'Richieste';
 }
 
+function campiRichiesta() {
+  const assenza = ['F', 'PERM'].includes($('ric-tipo').value);
+  $('ric-fine-box').hidden = !assenza;
+  $('ric-data-lbl').textContent = assenza ? 'Dal giorno' : 'Giorno';
+  if (assenza && (!$('ric-fine').value || $('ric-fine').value < $('ric-data').value)) $('ric-fine').value = $('ric-data').value;
+  $('ric-fine').min = $('ric-data').value;
+}
+$('ric-tipo').onchange = campiRichiesta;
+$('ric-data').onchange = campiRichiesta;
 $('btn-richieste').onclick = () => apriRichieste();
 $('ric-chiudi').onclick = async () => { $('dlg-richieste').close(); await carica(); };
 $('ric-invia').onclick = async () => {
@@ -445,14 +468,16 @@ $('ric-invia').onclick = async () => {
   const data = $('ric-data').value;
   if (!data) return ricErrore('Scegli il giorno.');
   const tipo = $('ric-tipo').value;
+  const assenza = tipo === 'F' || tipo === 'PERM';
+  const fine = assenza ? ($('ric-fine').value || data) : null;
   try {
-    try { await stato.be.inviaRichiesta(data, tipo, false); }
+    try { await stato.be.inviaRichiesta(data, tipo, false, fine); }
     catch (e) {
       const m = messaggio(e);
       if (!m.startsWith('[avviso]')) throw e;
       // qualche regola non è rispettata: l'operatore può comunque chiedere, ma Marie la vedrà in giallo
       if (!confirm(`${m.replace('[avviso] ', '')}\n\nPuoi inviare comunque la richiesta: Marie la vedrà segnata come critica e deciderà lei.\n\nInviarla comunque?`)) return;
-      await stato.be.inviaRichiesta(data, tipo, true);
+      await stato.be.inviaRichiesta(data, tipo, true, fine);
     }
   } catch (e) { return ricErrore(messaggio(e)); }
   await carica(); await disegnaRichieste();

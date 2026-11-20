@@ -27,17 +27,21 @@ con un piano di esempio di novembre 2026 (non è il piano vero) e senza account.
   sta prima e a chi sta dopo) oppure un altro accordo (aggiunge la persona che copre, con i suoi orari). Solo allora i
   colleghi ricevono la loro notifica e quel giorno risulta fatto da solo; a giorni finiti la segnalazione sparisce. Le regole sono nel database (sezione 15 di `schema.sql`).
 - **Richieste di riposo o di turno:** sono sempre aperte, senza che Marie debba aprirle: per ogni mese dal 1 ottobre
-  dell'anno prima fino a mezzanotte (ora italiana, calcolata dal database, non dal dispositivo) del 20 del mese prima.
+  dell'anno prima fino a mezzanotte (ora italiana, calcolata dal database, non dal dispositivo) del 20 del mese prima: è il termine per
+  **inviarle**. Poi Marie ha tempo per rispondere fino a mezzanotte del **21**; passato il 21 le richieste ancora in attesa
+  valgono come accettate (così gli operatori non guadagnano nulla a inviare tutto all'ultimo secondo).
   L'operatore clicca su un giorno della propria riga del foglio (o sul pulsante *Richieste*). Ognuno può inviarne al
   massimo 3 per mese (riposi e turni insieme). Il database **blocca**
   solo: giorno già occupato, turno già chiesto da un altro (vince chi chiede prima), troppi riposi nello stesso giorno
   (2; in estate 1). Le altre regole **avvisano** soltanto (mattina dopo un pomeriggio, più di due notti di fila, più di 4
   giorni di lavoro consecutivi, qualsiasi cosa il giorno dopo una notte, secondo riposo nello stesso giorno, in estate due
   riposi di fila): l'operatore può inviare comunque e Marie vede la richiesta in giallo ("critica"); per accettarla o
-  rifiutarla scrive la motivazione (obbligatoria anche se rifiuta una richiesta normale). Dopo il 20 del mese prima le
+  rifiutarla scrive la motivazione (obbligatoria anche se rifiuta una richiesta normale). Dopo il 21 del mese prima le
   richieste non esaminate valgono come **accettate** (lo fa il database all'apertura dell'app). Tutti gli operatori vedono
   tutte le richieste, anche ferie e permessi, e nel mese non ancora pubblicato il foglio mostra solo ferie, permessi,
   riposi e turni richiesti (le richieste in attesa sono tratteggiate). Le regole sono nel database (sezione 16 di `schema.sql`).
+- **Ferie e permessi:** si chiedono dallo stesso pulsante o cliccando sul giorno (tipo *Ferie* o *Permesso*, "dal giorno" e "fino al"), con la stessa finestra delle altre richieste e senza contare nelle 3 al mese. Le domeniche in mezzo al periodo diventano da sole il trattino (per Marie anche i sabati, perché il suo contratto è senza weekend); non si può cominciare né finire di domenica (per Marie nemmeno di sabato). Il database blocca i giorni già occupati e avvisa (richiesta in giallo per Marie) se in quei giorni sono già assenti almeno 2 colleghi. Marie accetta o rifiuta come per le altre richieste (motivazione se rifiuta o se è critica); passato il 21 valgono come accettate. Accettate diventano caselle protette.
+- **Weekend di Marie:** Marie ha il contratto senza sabato e domenica (colonna `senza_weekend` di `staff`, impostata dallo schema per la coordinatrice). Sul foglio e nel PDF i suoi sabati e domeniche vuoti mostrano la R di default, solo a video (non è salvata nel database), e sparisce se quel giorno c'è un altro turno o un'assenza.
 - **Notifiche:** campanella in alto (grigia se non ce ne sono, con pallino rosso e numero se ce ne sono): si apre un menu con l'elenco, "Letta" per ognuna o "Segna tutte come lette".
 - Installabile sul telefono (PWA). Notifiche nell'app già attive per la malattia; le email e le notifiche sul telefono arrivano nei prossimi passi della fase 2.
 

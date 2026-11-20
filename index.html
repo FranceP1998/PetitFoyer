@@ -154,10 +154,11 @@
     <div id="ric-op" hidden>
       <label class="ric-mese">Mese <select id="ric-mese"></select></label>
       <div class="campi">
-        <label>Giorno<input id="ric-data" type="date"></label>
         <label>Che cosa chiedi
-          <select id="ric-tipo"><option value="RR">Riposo</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select>
+          <select id="ric-tipo"><option value="RR">Riposo</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option><option value="F">Ferie</option><option value="PERM">Permesso</option></select>
         </label>
+        <label><span id="ric-data-lbl">Giorno</span><input id="ric-data" type="date"></label>
+        <label id="ric-fine-box" hidden>Fino al (compreso)<input id="ric-fine" type="date"></label>
       </div>
       <button type="button" class="primario" id="ric-invia">Invia la richiesta</button>
     </div>

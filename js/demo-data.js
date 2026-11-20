@@ -53,6 +53,7 @@ export const DEMO = {
    "id": 7,
    "name": "Marie",
    "role": "coordinator",
+   "senza_weekend": true,
    "sort_order": 70,
    "fixed_pattern": false,
    "active": true
