@@ -21,7 +21,11 @@ con un piano di esempio di novembre 2026 (non è il piano vero) e senza account.
   (banner in alto); se accetta, Marie può modificare quella casella per 24 ore. La regola è nel database
   (`supabase/schema.sql`, sezione 9), quindi vale anche fuori dall'app. Marie può inserirle, ma una volta
   inserite si tolgono solo con il consenso: un errore di battitura richiede quindi il consenso dell'operatore.
-- Installabile sul telefono (PWA). Le notifiche arrivano nella fase 2.
+- **Comunica malattia** (operatore): scrive primo e ultimo giorno del medico, vede l'anteprima e conferma. Sui giorni
+  con un turno compare MU (riposi, ferie e permessi non si toccano; per le notti conta il giorno in cui inizia);
+  si salvano solo le date. Marie riceve la notifica nell'app, sceglie le coperture (+4 ore a chi sta prima e a chi
+  sta dopo) e solo allora i colleghi ricevono la loro notifica. Le regole sono nel database (sezione 15 di `schema.sql`).
+- Installabile sul telefono (PWA). Notifiche nell'app già attive per la malattia; le email e le notifiche sul telefono arrivano nei prossimi passi della fase 2.
 
 ## Installazione (circa 30 minuti)
 

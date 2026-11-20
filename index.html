@@ -75,6 +75,7 @@
         <button id="btn-modifica" class="solo-coord" hidden>Modifica</button>
         <button id="btn-eventi" class="solo-coord" hidden>Eventi del mese</button>
         <button id="btn-pubblica" class="solo-coord" hidden>Pubblica</button>
+        <button id="btn-malattia" class="solo-op" hidden>Comunica malattia</button>
         <button id="btn-pdf" class="primario">Salva PDF</button>
         <span id="utente" class="muted"></span>
         <button id="btn-personale" class="solo-coord" hidden>Gestione personale</button>
@@ -84,6 +85,8 @@
     </header>
 
     <p id="messaggio" class="no-print avviso" hidden></p>
+    <section id="notifiche" class="no-print" hidden></section>
+    <section id="malattie" class="no-print" hidden></section>
     <section id="consensi" class="no-print" hidden></section>
 
     <main id="pagina" class="pagina">
@@ -129,6 +132,24 @@
         <button type="submit" class="primario" id="cella-salva" value="ok">Salva</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Comunica malattia (operatore) -->
+  <dialog id="dlg-malattia" class="no-print">
+    <h2>Comunica malattia</h2>
+    <p class="muted">Scrivi il primo e l'ultimo giorno di malattia indicati dal medico. Non serve altro: non viene salvato né il certificato né la diagnosi. Riposi, ferie e permessi restano come sono.</p>
+    <div class="campi">
+      <label>Primo giorno<input id="ml-da" type="date"></label>
+      <label>Ultimo giorno<input id="ml-a" type="date"></label>
+    </div>
+    <div id="ml-anteprima" class="ml-anteprima"></div>
+    <p id="ml-err" class="err" role="alert" hidden></p>
+    <div class="dlg-azioni">
+      <span class="spazio"></span>
+      <button type="button" id="ml-chiudi">Chiudi</button>
+      <button type="button" class="primario" id="ml-controlla">Controlla</button>
+      <button type="button" class="primario" id="ml-conferma" hidden>Conferma e comunica</button>
+    </div>
   </dialog>
 
   <!-- Copertura di una malattia -->

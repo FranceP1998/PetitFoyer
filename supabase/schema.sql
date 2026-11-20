@@ -551,3 +551,205 @@ drop trigger if exists shifts_esclusivi_trg on public.shifts;
 create trigger shifts_esclusivi_trg
   before insert or update of kind, staff_id, date on public.shifts
   for each row execute function public.shifts_esclusivi();
+
+-- ---------------------------------------------------------------------
+-- 15. Malattia comunicata dall'operatore + notifiche nell'app
+--     L'operatore scrive solo il primo e l'ultimo giorno indicati dal medico. Il database:
+--       - mette MU sui giorni in cui aveva un turno (M, P, N, 10-18, copertura, spesa, recupero ore);
+--         i giorni con soli riposi, ferie o permessi (o vuoti) non si toccano;
+--         per le notti conta il giorno in cui la notte INIZIA;
+--       - registra la comunicazione (SOLO le date: niente certificato, niente diagnosi);
+--       - avvisa la coordinatrice nell'app.
+--     I colleghi che coprono ricevono la notifica SOLO quando la coordinatrice conferma la copertura.
+--     Tutto passa da queste funzioni: nessuno scrive direttamente nelle tabelle.
+-- ---------------------------------------------------------------------
+create table if not exists public.notifications (
+  id         bigint generated always as identity primary key,
+  staff_id   bigint not null references public.staff(id) on delete cascade,   -- destinatario
+  kind       text   not null,
+  text       text   not null,
+  data       jsonb  not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  read_at    timestamptz,
+  emailed_at timestamptz                                -- sarà usata dall'invio email (passo successivo)
+);
+create index if not exists notifications_dest_idx on public.notifications (staff_id, read_at);
+
+create table if not exists public.sick_reports (
+  id         bigint generated always as identity primary key,
+  staff_id   bigint not null references public.staff(id) on delete cascade,
+  first_day  date   not null,
+  last_day   date   not null check (last_day >= first_day),
+  days       jsonb  not null default '[]'::jsonb,       -- [{"date": "2026-11-06", "kind": "M"}, ...] turni saltati
+  status     text   not null default 'open' check (status in ('open','closed')),
+  created_at timestamptz not null default now(),
+  closed_at  timestamptz
+);
+
+-- Quali giorni diventano MU: giorni con un'attività e senza riposi/ferie/permessi, non già in malattia
+create or replace function public.giorni_malattia(p_staff bigint, p_from date, p_to date)
+returns table (giorno date, saltato text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.date,
+         (array_agg(s.kind order by array_position(array['M','P','N','T1018','COP','SPESA','RB'], s.kind))
+            filter (where s.kind in ('M','P','N','T1018','COP','SPESA','RB')))[1]
+    from public.shifts s
+   where s.staff_id = p_staff and s.date between p_from and p_to
+   group by s.date
+  having bool_or(s.kind in ('M','P','N','T1018','COP','SPESA','RB'))
+     and not bool_or(s.kind in ('R','RR','F','FS','PERM','MU'))
+$$;
+revoke all on function public.giorni_malattia(bigint, date, date) from public;
+
+create or replace function public.mia_persona()
+returns bigint
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select id from public.staff
+   where user_id = auth.uid() and active and (end_date is null or end_date >= current_date);
+$$;
+revoke all on function public.mia_persona() from public;
+
+create or replace function public.controlla_periodo_malattia(p_from date, p_to date)
+returns void
+language plpgsql
+as $$
+begin
+  if p_from is null or p_to is null then raise exception 'Scrivi il primo e l''ultimo giorno.' using errcode = '22023'; end if;
+  if p_to < p_from then raise exception 'L''ultimo giorno non può essere prima del primo.' using errcode = '22023'; end if;
+  if p_to - p_from > 59 then raise exception 'Il periodo è troppo lungo (massimo 60 giorni): per periodi più lunghi avvisa Marie.' using errcode = '22023'; end if;
+  if p_from < current_date - 60 then raise exception 'Il primo giorno è troppo indietro nel tempo: avvisa Marie.' using errcode = '22023'; end if;
+end;
+$$;
+revoke all on function public.controlla_periodo_malattia(date, date) from public;
+
+-- Anteprima: cosa cambierebbe (senza modificare nulla). Dei piani non ancora pubblicati si dice solo quanti giorni.
+create or replace function public.anteprima_malattia(p_from date, p_to date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_staff bigint := public.mia_persona(); v_pub jsonb; v_bozza int;
+begin
+  if v_staff is null then raise exception 'Accesso non valido.' using errcode = '42501'; end if;
+  perform public.controlla_periodo_malattia(p_from, p_to);
+  select coalesce(jsonb_agg(jsonb_build_object('date', giorno, 'kind', saltato) order by giorno) filter (where public.is_published(giorno)), '[]'::jsonb),
+         count(*) filter (where not public.is_published(giorno))
+    into v_pub, v_bozza
+    from public.giorni_malattia(v_staff, p_from, p_to);
+  return jsonb_build_object('giorni', v_pub, 'giorni_bozza', v_bozza);
+end;
+$$;
+
+-- Comunicazione vera e propria
+create or replace function public.comunica_malattia(p_from date, p_to date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_staff bigint := public.mia_persona(); v_nome text; v_days jsonb; v_id bigint; v_n int;
+begin
+  if v_staff is null then raise exception 'Accesso non valido.' using errcode = '42501'; end if;
+  perform public.controlla_periodo_malattia(p_from, p_to);
+  select name into v_nome from public.staff where id = v_staff;
+
+  select coalesce(jsonb_agg(jsonb_build_object('date', giorno, 'kind', saltato) order by giorno), '[]'::jsonb)
+    into v_days from public.giorni_malattia(v_staff, p_from, p_to);
+  v_n := jsonb_array_length(v_days);
+  if v_n = 0 then
+    return jsonb_build_object('id', null, 'giorni', v_days);           -- niente da modificare: nessun turno in quel periodo
+  end if;
+
+  insert into public.shifts (staff_id, date, kind)
+  select v_staff, (x->>'date')::date, 'MU' from jsonb_array_elements(v_days) x;
+
+  insert into public.sick_reports (staff_id, first_day, last_day, days)
+  values (v_staff, p_from, p_to, v_days) returning id into v_id;
+
+  insert into public.notifications (staff_id, kind, text, data)
+  select c.id, 'malattia',
+         v_nome || ' ha comunicato malattia dal ' || to_char(p_from, 'DD/MM') || ' al ' || to_char(p_to, 'DD/MM')
+           || ': ' || v_n || case when v_n = 1 then ' turno da coprire.' else ' turni da coprire.' end
+           || ' Scegli le coperture.',
+         jsonb_build_object('report', v_id, 'staff', v_staff)
+    from public.staff c
+   where c.role = 'coordinator' and c.active and c.id <> v_staff
+     and (c.end_date is null or c.end_date >= current_date);
+
+  return jsonb_build_object('id', v_id, 'giorni', v_days);
+end;
+$$;
+
+-- La coordinatrice conferma l'orario di copertura di un collega: SOLO ora il collega riceve la notifica
+create or replace function public.conferma_copertura(p_staff bigint, p_date date, p_kind text, p_start time, p_end time)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_coordinator() then
+    raise exception 'Solo la coordinatrice.' using errcode = '42501';
+  end if;
+  if p_kind not in ('M','P','N') then raise exception 'Turno non valido.' using errcode = '22023'; end if;
+  update public.shifts set start_time = p_start, end_time = p_end
+   where staff_id = p_staff and date = p_date and kind = p_kind;
+  if not found then raise exception 'Turno non trovato.' using errcode = '22023'; end if;
+  insert into public.notifications (staff_id, kind, text, data)
+  values (p_staff, 'copertura',
+          'Il tuo turno ' || p_kind || ' del ' || to_char(p_date, 'DD/MM') || ' è stato modificato per una copertura: orario ' ||
+          to_char(p_start, 'HH24:MI') || '–' || to_char(p_end, 'HH24:MI') || '. Controlla il foglio.',
+          jsonb_build_object('date', p_date, 'kind', p_kind));
+end;
+$$;
+
+create or replace function public.chiudi_malattia(p_id bigint)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  update public.sick_reports set status = 'closed', closed_at = now() where id = p_id and status = 'open';
+end;
+$$;
+
+create or replace function public.segna_notifica_letta(p_id bigint)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.notifications set read_at = now()
+   where id = p_id and read_at is null and staff_id = public.mia_persona();
+$$;
+
+revoke all on function public.anteprima_malattia(date, date), public.comunica_malattia(date, date),
+  public.conferma_copertura(bigint, date, text, time, time), public.chiudi_malattia(bigint),
+  public.segna_notifica_letta(bigint) from public;
+grant execute on function public.anteprima_malattia(date, date), public.comunica_malattia(date, date),
+  public.conferma_copertura(bigint, date, text, time, time), public.chiudi_malattia(bigint),
+  public.segna_notifica_letta(bigint) to authenticated;
+
+alter table public.notifications enable row level security;
+alter table public.sick_reports  enable row level security;
+drop policy if exists notifications_select on public.notifications;
+create policy notifications_select on public.notifications
+  for select to authenticated
+  using (staff_id in (select s.id from public.staff s where s.user_id = auth.uid()));
+drop policy if exists sick_reports_select on public.sick_reports;
+create policy sick_reports_select on public.sick_reports
+  for select to authenticated
+  using (public.is_coordinator() or staff_id in (select s.id from public.staff s where s.user_id = auth.uid()));
+revoke all on public.notifications, public.sick_reports from anon, authenticated;
+grant select on public.notifications, public.sick_reports to authenticated;

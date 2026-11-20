@@ -32,7 +32,7 @@ const ESCLUSIVI = ['M', 'P', 'N', 'R', 'RR', 'F', 'FS', 'PERM', 'T1018'];
 const PER_MALATTIA = ['M', 'P', 'N', 'T1018', 'COP', 'SPESA', 'RB'];
 const SENZA_MALATTIA = ['R', 'RR', 'F', 'FS', 'PERM'];
 
-const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [] };
+const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [], notifiche: [], malattie: [] };
 const valido = (s) => s.status === 'approved' && Date.now() - Date.parse(s.decided_at) < 24 * 3600 * 1000;
 const NOMI_PROTETTI = { F: 'ferie', FS: 'domenica dentro ferie o permessi', PERM: 'permesso', RR: 'riposo richiesto', M: 'turno richiesto', P: 'turno richiesto', N: 'turno richiesto' };
 const elencoProtetti = (kinds) => [...new Set(String(kinds || '').split(',').filter(Boolean).map((k) => NOMI_PROTETTI[k] || k))].join(', ');
@@ -126,6 +126,7 @@ async function mostra() {
   $('login').hidden = true; $('app').hidden = false;
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
+  for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
   $('utente').textContent = stato.utente.name;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
@@ -139,6 +140,8 @@ async function carica() {
     stato.dati = await stato.be.caricaMese(stato.y, stato.m);
   } catch (e) { mostraMessaggio('Non riesco a caricare i dati: ' + e.message); return; }
   try { stato.sblocchi = await stato.be.elencaSblocchi(); } catch { stato.sblocchi = []; }
+  try { stato.notifiche = await stato.be.elencaNotifiche(); } catch { stato.notifiche = []; }
+  try { stato.malattie = isCoord() ? await stato.be.elencaMalattie() : []; } catch { stato.malattie = []; }
   disegna();
 }
 
@@ -172,6 +175,8 @@ function disegna() {
   $('pagina').hidden = nascosto;
   $('btn-pdf').hidden = nascosto;
   disegnaConsensi();
+  disegnaNotifiche();
+  disegnaMalattie();
   if (nascosto) return;
 
   $('legenda').innerHTML = righeLegenda(events, stato.y, stato.m, shifts).map((r) => `<li class="${r.cls}">${r.html}</li>`).join('');
@@ -279,6 +284,77 @@ $('consensi').addEventListener('click', async (ev) => {
   try { await stato.be.rispondiSblocco(isNaN(+b.dataset.risp) ? b.dataset.risp : +b.dataset.risp, b.dataset.ok === '1'); } catch (e) { alert(e.message); }
   await carica();
 });
+
+// ------------------------------------------------------------ notifiche nell'app
+function disegnaNotifiche() {
+  const box = $('notifiche');
+  box.innerHTML = stato.notifiche.map((n) => `<div class="consenso notifica" role="status"><p>${esc(n.text)}</p>
+    <div class="consenso-azioni"><button data-letta="${n.id}">Ok, letto</button></div></div>`).join('');
+  box.hidden = !stato.notifiche.length;
+}
+$('notifiche').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button[data-letta]'); if (!b) return;
+  try { await stato.be.segnaNotificaLetta(+b.dataset.letta); } catch (e) { alert(messaggio(e)); }
+  await carica();
+});
+
+// ------------------------------------------------------------ malattia: pannello della coordinatrice
+const TURNO_SALTATO = { M: 'mattina', P: 'pomeriggio', N: 'notte', T1018: 'turno 10–18', COP: 'copertura', SPESA: 'copertura spesa', RB: 'recupero ore' };
+function disegnaMalattie() {
+  const box = $('malattie');
+  box.innerHTML = stato.malattie.map((r) => `<div class="consenso malattia">
+    <p><b>${esc(nomePersona(r.staff_id))}</b> è in malattia dal ${dataIt(r.first_day)} al ${dataIt(r.last_day)}. Turni da coprire:</p>
+    <ul class="mal-giorni">${r.days.map((d, i) => `<li><span>${dataEstesa(d.date)} · ${TURNO_SALTATO[d.kind] || d.kind}</span>${
+      'MPN'.includes(d.kind) ? `<button type="button" data-mal="${r.id}" data-i="${i}">Scegli la copertura</button>` : '<small>da organizzare a mano</small>'}</li>`).join('')}</ul>
+    <div class="consenso-azioni"><button type="button" data-chiudi-mal="${r.id}">Ho finito: segna come gestita</button></div>
+  </div>`).join('');
+  box.hidden = !stato.malattie.length;
+}
+$('malattie').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  try {
+    if (b.dataset.chiudiMal) { await stato.be.chiudiMalattia(+b.dataset.chiudiMal); await carica(); return; }
+    if (b.dataset.mal) {
+      const r = stato.malattie.find((x) => x.id === +b.dataset.mal), d = r.days[+b.dataset.i];
+      const [yy, mm] = d.date.split('-').map(Number);
+      if (yy !== stato.y || mm !== stato.m) { stato.y = yy; stato.m = mm; await carica(); }       // la copertura si propone guardando quel mese
+      apriCopertura(r.staff_id, d.date, d.kind);
+    }
+  } catch (e) { alert(messaggio(e)); }
+});
+
+// ------------------------------------------------------------ malattia: comunicazione dell'operatore
+function malErrore(t) { $('ml-err').textContent = t || ''; $('ml-err').hidden = !t; }
+function malReset() { $('ml-anteprima').innerHTML = ''; malErrore(''); $('ml-conferma').hidden = true; $('ml-controlla').hidden = false; }
+$('btn-malattia').onclick = () => { $('ml-da').value = oggiIso(); $('ml-a').value = ''; malReset(); $('dlg-malattia').showModal(); };
+$('ml-da').onchange = malReset; $('ml-a').onchange = malReset;
+$('ml-chiudi').onclick = async () => { $('dlg-malattia').close(); await carica(); };
+$('ml-controlla').onclick = async () => {
+  malReset();
+  const da = $('ml-da').value, a = $('ml-a').value;
+  if (!da || !a) return malErrore('Scrivi il primo e l\'ultimo giorno.');
+  if (a < da) return malErrore('L\'ultimo giorno non può essere prima del primo.');
+  try {
+    const r = await stato.be.anteprimaMalattia(da, a);
+    const elenco = r.giorni.map((g) => `<li>${dataEstesa(g.date)} · ${TURNO_SALTATO[g.kind] || g.kind}</li>`).join('');
+    let html = '';
+    if (r.giorni.length) html += `<p>Questi turni diventano malattia:</p><ul>${elenco}</ul>`;
+    if (r.giorni_bozza) html += `<p>${r.giorni_bozza === 1 ? 'Un altro giorno cade' : r.giorni_bozza + ' altri giorni cadono'} in un piano non ancora pubblicato: la malattia viene segnata comunque.</p>`;
+    if (!r.giorni.length && !r.giorni_bozza) html = '<p>In quei giorni non hai turni da modificare (riposi, ferie e permessi restano com\'erano). Non c\'è niente da comunicare.</p>';
+    else html += '<p>Marie riceve l\'avviso e sceglie le coperture. I colleghi vengono avvisati solo dopo la sua scelta.</p>';
+    $('ml-anteprima').innerHTML = html;
+    $('ml-conferma').hidden = !(r.giorni.length || r.giorni_bozza);
+  } catch (e) { malErrore(messaggio(e)); }
+};
+$('ml-conferma').onclick = async () => {
+  try {
+    const r = await stato.be.comunicaMalattia($('ml-da').value, $('ml-a').value);
+    const n = r.giorni.length;
+    $('ml-anteprima').innerHTML = `<p><b>Fatto.</b> Ho segnato la malattia su ${n} ${n === 1 ? 'turno' : 'turni'} e ho avvisato Marie.</p>`;
+    $('ml-conferma').hidden = true; $('ml-controlla').hidden = true;
+    await carica();
+  } catch (e) { malErrore(messaggio(e)); }
+};
 
 // ------------------------------------------------------------ modifica cella
 let cellaCorrente = null;
@@ -426,7 +502,7 @@ $('cop-no').onclick = () => $('dlg-copertura').close();
 $('cop-si').onclick = async () => {
   const scelte = [...$('cop-righe').querySelectorAll('input:checked')].map((i) => copertura[+i.dataset.i]);
   try {
-    for (const v of scelte) await stato.be.impostaOrario(v.staffId, v.date, v.kind, v.inizio, v.fine);
+    for (const v of scelte) await stato.be.confermaCopertura(v.staffId, v.date, v.kind, v.inizio, v.fine);   // cambia l'orario e avvisa il collega
   } catch (e) { alert('Non sono riuscito ad applicare: ' + e.message); return; }
   $('dlg-copertura').close();
   await carica();

@@ -4,6 +4,7 @@
 import { CONFIG } from './config.js';
 import { DEMO } from './demo-data.js';
 import { iso, pad, giorniDelMese, meseDopo, PROTETTI } from './grid.js';
+import { giorniMalattia } from './mutua.js';
 
 export const isDemo = !(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
 
@@ -34,6 +35,18 @@ function backendDemo() {
     const s = db.staff.find(cerca);
     return { staffId: s.id, name: s.name, role: s.role };
   };
+  // regole sul periodo (come nel database)
+  const controllaPeriodo = (da, a) => {
+    if (!da || !a) throw new Error('Scrivi il primo e l\'ultimo giorno.');
+    if (a < da) throw new Error('L\'ultimo giorno non può essere prima del primo.');
+    if ((Date.parse(a) - Date.parse(da)) / 86400000 > 59) throw new Error('Il periodo è troppo lungo (massimo 60 giorni): per periodi più lunghi avvisa Marie.');
+  };
+  // nel demo un mese è pubblicato se lo dice il suo stato (il 1° giorno conta per il mese prima)
+  const meseDemoPubblicato = (data) => {
+    const stato = (y, m) => (db.monthsState?.[`${y}-${m}`] || (y === DEMO.month.year && m === DEMO.month.month ? DEMO.month : { status: 'draft' })).status === 'published';
+    const [y, m, g] = data.split('-').map(Number);
+    return stato(y, m) || (g === 1 && stato(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1));
+  };
   return {
     demo: true,
     async sessione() { return utente(); },
@@ -55,6 +68,43 @@ function backendDemo() {
       if (db.shifts.some((s) => s.staff_id === id)) throw new Error('Una persona con turni non si elimina: imposta la data di fine servizio.');
       db.staff = db.staff.filter((x) => x.id !== id); salva();
     },
+    // --- malattia comunicata dall'operatore (demo: tutto in locale)
+    async anteprimaMalattia(da, a) {
+      controllaPeriodo(da, a);
+      const giorni = giorniMalattia(db.shifts, utente().staffId, da, a);
+      const pub = giorni.filter((g) => meseDemoPubblicato(g.date));
+      return { giorni: pub, giorni_bozza: giorni.length - pub.length };
+    },
+    async comunicaMalattia(da, a) {
+      controllaPeriodo(da, a);
+      const u = utente();
+      const giorni = giorniMalattia(db.shifts, u.staffId, da, a);
+      if (!giorni.length) return { id: null, giorni };
+      for (const g of giorni) db.shifts.push({ id: nextId++, staff_id: u.staffId, date: g.date, kind: 'MU', requested: false, start_time: null, end_time: null });
+      db.sick = db.sick || [];
+      const rep = { id: nextId++, staff_id: u.staffId, first_day: da, last_day: a, days: giorni, status: 'open', created_at: new Date().toISOString() };
+      db.sick.push(rep);
+      db.notifiche = db.notifiche || [];
+      for (const c of db.staff.filter((x) => x.role === 'coordinator' && x.id !== u.staffId)) {
+        db.notifiche.push({ id: nextId++, staff_id: c.id, kind: 'malattia', created_at: new Date().toISOString(), read_at: null,
+          text: `${u.name} ha comunicato malattia dal ${da.slice(8, 10)}/${da.slice(5, 7)} al ${a.slice(8, 10)}/${a.slice(5, 7)}: ${giorni.length} ${giorni.length === 1 ? 'turno da coprire.' : 'turni da coprire.'} Scegli le coperture.` });
+      }
+      salva();
+      return { id: rep.id, giorni };
+    },
+    async elencaMalattie() { return (db.sick || []).filter((r) => r.status === 'open'); },
+    async chiudiMalattia(id) { const r = (db.sick || []).find((x) => x.id === id); if (r) { r.status = 'closed'; salva(); } },
+    async confermaCopertura(staffId, data, kind, inizio, fine) {
+      const r = db.shifts.find((s) => s.staff_id === staffId && s.date === data && s.kind === kind);
+      if (!r) throw new Error('Turno non trovato.');
+      r.start_time = inizio; r.end_time = fine;
+      db.notifiche = db.notifiche || [];
+      db.notifiche.push({ id: nextId++, staff_id: staffId, kind: 'copertura', created_at: new Date().toISOString(), read_at: null,
+        text: `Il tuo turno ${kind} del ${data.slice(8, 10)}/${data.slice(5, 7)} è stato modificato per una copertura: orario ${inizio}–${fine}. Controlla il foglio.` });
+      salva();
+    },
+    async elencaNotifiche() { const u = utente(); return (db.notifiche || []).filter((n) => n.staff_id === u.staffId && !n.read_at).sort((x, y) => y.created_at.localeCompare(x.created_at)); },
+    async segnaNotificaLetta(id) { const n = (db.notifiche || []).find((x) => x.id === id && x.staff_id === utente().staffId); if (n) { n.read_at = new Date().toISOString(); salva(); } },
     cambiaRuoloDemo(r) { ruolo = r; scrivi('turni-demo-ruolo', r); },
     async caricaMese(y, m) {
       const { da, a } = intervallo(y, m);
@@ -241,6 +291,17 @@ async function backendSupabase() {
       if (patch.status === 'published') row.published_at = new Date().toISOString();
       errore(await sb.from('months').upsert(row, { onConflict: 'year,month' }));
     },
+    // ---- malattia comunicata dall'operatore (il database applica le regole e avvisa Marie)
+    async anteprimaMalattia(da, a) { return errore(await sb.rpc('anteprima_malattia', { p_from: da, p_to: a })); },
+    async comunicaMalattia(da, a) { return errore(await sb.rpc('comunica_malattia', { p_from: da, p_to: a })); },
+    async elencaMalattie() { return errore(await sb.from('sick_reports').select('id,staff_id,first_day,last_day,days,status,created_at').eq('status', 'open').order('created_at')); },
+    async chiudiMalattia(id) { errore(await sb.rpc('chiudi_malattia', { p_id: id })); },
+    async confermaCopertura(staffId, data, kind, inizio, fine) {
+      errore(await sb.rpc('conferma_copertura', { p_staff: staffId, p_date: data, p_kind: kind, p_start: inizio, p_end: fine }));
+    },
+    // ---- notifiche nell'app
+    async elencaNotifiche() { return errore(await sb.from('notifications').select('id,kind,text,created_at').is('read_at', null).order('created_at', { ascending: false })); },
+    async segnaNotificaLetta(id) { errore(await sb.rpc('segna_notifica_letta', { p_id: id })); },
     async aggiungiEvento(e) { errore(await sb.from('events').insert(e)); },
     async eliminaEvento(id) { errore(await sb.from('events').delete().eq('id', id)); },
   };

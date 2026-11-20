@@ -25,3 +25,23 @@ export function proponiCopertura({ shifts, staff, staffId, date, turno, ore = 4 
   if (dp) { const [a, b] = orari(dp); out.dopo = { staffId: dp.staff_id, nome: nome(dp.staff_id), date: dp.date, kind: dp.kind, inizio: aggiungiOre(a, -ore), fine: b }; }
   return out;
 }
+
+// Quali giorni diventano MU quando un operatore comunica la malattia (stessa regola del database):
+// giorni con un'attività (M, P, N, 10-18, copertura, spesa, recupero ore), senza riposi/ferie/permessi, non già in malattia.
+// Per le notti conta il giorno in cui la notte INIZIA. Restituisce [{date, kind}] dove kind = turno saltato.
+export const ATTIVITA = ['M', 'P', 'N', 'T1018', 'COP', 'SPESA', 'RB'];
+export function giorniMalattia(shifts, staffId, da, a) {
+  const perGiorno = new Map();
+  for (const s of shifts) {
+    if (s.staff_id !== staffId || s.date < da || s.date > a) continue;
+    if (!perGiorno.has(s.date)) perGiorno.set(s.date, new Set());
+    perGiorno.get(s.date).add(s.kind);
+  }
+  const out = [];
+  for (const [date, kinds] of [...perGiorno].sort((x, y) => x[0].localeCompare(y[0]))) {
+    if (['R', 'RR', 'F', 'FS', 'PERM', 'MU'].some((k) => kinds.has(k))) continue;
+    const saltato = ATTIVITA.find((k) => kinds.has(k));
+    if (saltato) out.push({ date, kind: saltato });
+  }
+  return out;
+}
