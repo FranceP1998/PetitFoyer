@@ -42,4 +42,18 @@ export function controllaRegole(db, staffId, date, kind, escludi = null) {
 }
 
 export const MAX_RICHIESTE = 3;
+// Le richieste di un mese sono sempre aperte: dal 1 ottobre dell'anno prima fino alla mezzanotte (ora italiana) del 20 del mese prima.
 export const scadenzaRichieste = (y, m) => { const p = m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 }; return `${p.y}-${String(p.m).padStart(2, '0')}-20`; };
+export const inizioRichieste = (y) => `${y - 1}-10-01`;
+// la data di oggi è sempre quella di Roma (la scadenza scatta a mezzanotte italiana, qualunque sia il fuso del dispositivo)
+export const oggiRoma = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+export const richiesteAperte = (y, m, oggi = oggiRoma()) => oggi >= inizioRichieste(y) && oggi <= scadenzaRichieste(y, m);
+// elenco dei mesi con le richieste aperte oggi (da questo mese a 26 mesi avanti)
+export function mesiConRichieste(oggi = oggiRoma()) {
+  const out = []; let y = +oggi.slice(0, 4), m = +oggi.slice(5, 7);
+  for (let i = 0; i <= 26; i++) {
+    if (richiesteAperte(y, m, oggi)) out.push({ year: y, month: m, scadenza: scadenzaRichieste(y, m) });
+    if (++m > 12) { m = 1; y++; }
+  }
+  return out;
+}

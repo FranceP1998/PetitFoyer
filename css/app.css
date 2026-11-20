@@ -119,7 +119,7 @@ svg.spesa { width: 17px; height: 17px; vertical-align: middle; }
 /* sbarra della notte: dal pomeriggio del giorno N (in basso a sinistra) alla mattina di N+1 (in alto a destra) */
 #foglio { position: relative; }
 svg.notti { position: absolute; left: 0; top: 0; pointer-events: none; color: #111; z-index: 1; }
-td.notte-inizia sub.req { position: absolute; right: 3px; bottom: 2px; margin: 0; }
+td.notte-inizia sub.req { position: absolute; left: calc(var(--s) * .1); top: calc(var(--s) * .36); right: auto; bottom: auto; margin: 0; }   /* in alto a sinistra: sopra la sbarra, lontano dalla casella dove la notte finisce */
 
 /* modifica */
 .modificabile td[data-staff] { cursor: pointer; }
@@ -266,3 +266,19 @@ table.foglio td.in-attesa.critica { outline-color: #b58900; background-color: #f
 /* operatore: con le richieste aperte, i giorni della propria riga si cliccano per chiedere */
 .richiedibile tr.mia td[data-p] { cursor: pointer; }
 .richiedibile tr.mia td[data-p]:hover { outline: 2px solid var(--accento); outline-offset: -2px; background-color: #eef5ff; }
+
+/* campanella delle notifiche: neutra se non ce ne sono, con pallino rosso e numero se ce ne sono */
+.campana { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 36px; padding: 0; color: #8a8a85; background: transparent; border: 1px solid transparent; border-radius: 999px; cursor: pointer; }
+.campana:hover { background: #efeeea; }
+.campana.con-notifiche { color: #222; }
+.pallino { position: absolute; top: 0; right: 0; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: #d93025; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; border: 2px solid var(--sfondo); }
+.pannello-notifiche { position: fixed; right: 8px; z-index: 50; width: min(380px, calc(100vw - 16px)); max-height: min(70vh, 520px); overflow: auto; background: #fff; border: 1px solid #d9d7d0; border-radius: 14px; box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+.pannello-notifiche[hidden] { display: none; }
+.pn-testa { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #eceae4; position: sticky; top: 0; background: #fff; }
+.pannello-notifiche ul { list-style: none; margin: 0; padding: 0; }
+.pannello-notifiche li { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid #f1efea; font-size: 14px; }
+.pannello-notifiche li:last-child { border-bottom: 0; }
+.pannello-notifiche li p { margin: 0 0 2px; }
+.pannello-notifiche li .muted { font-size: 12px; }
+.pannello-notifiche li.vuota { color: #777; justify-content: center; padding: 22px 14px; }
+.pn-az { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }

@@ -5,7 +5,7 @@ import { CONFIG } from './config.js';
 import { DEMO } from './demo-data.js';
 import { iso, pad, giorniDelMese, meseDopo, PROTETTI } from './grid.js';
 import { giorniMalattia } from './mutua.js';
-import { controllaRegole, MAX_RICHIESTE, scadenzaRichieste } from './richieste.js';
+import { controllaRegole, MAX_RICHIESTE, richiesteAperte, mesiConRichieste } from './richieste.js';
 
 export const isDemo = !(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
 
@@ -131,9 +131,7 @@ function backendDemo() {
     async elencaNotifiche() { const u = utente(); return (db.notifiche || []).filter((n) => n.staff_id === u.staffId && !n.read_at).sort((x, y) => y.created_at.localeCompare(x.created_at)); },
     async segnaNotificaLetta(id) { const n = (db.notifiche || []).find((x) => x.id === id && x.staff_id === utente().staffId); if (n) { n.read_at = new Date().toISOString(); salva(); } },
     // --- richieste di riposo o di turno (demo: le regole sono in js/richieste.js, nell'app vera nel database)
-    async mesiRichieste() {
-      return Object.entries(db.monthsState || {}).filter(([, v]) => v.requests_open).map(([k]) => { const [y, m] = k.split('-').map(Number); return { year: y, month: m, scadenza: scadenzaRichieste(y, m) }; });
-    },
+    async mesiRichieste() { return mesiConRichieste(); },
     async elencaRichieste(y, m) {
       const pre = `${y}-${pad(m)}-`;
       return (db.richieste || []).filter((r) => r.date.startsWith(pre) && r.status !== 'cancelled')
@@ -143,7 +141,7 @@ function backendDemo() {
     async inviaRichiesta(date, kind, conferma = false) {
       const u = utente(); db.richieste = db.richieste || [];
       const y = +date.slice(0, 4), m = +date.slice(5, 7);
-      if (!db.monthsState?.[`${y}-${m}`]?.requests_open) throw new Error('Le richieste per questo mese non sono aperte.');
+      if (!richiesteAperte(y, m)) throw new Error('Le richieste per questo mese non sono aperte: si possono fare dal 1 ottobre dell\'anno prima fino al 20 del mese prima.');
       const pre = `${y}-${pad(m)}-`;
       if (db.richieste.filter((r) => r.staff_id === u.staffId && r.date.startsWith(pre) && ['pending', 'accepted'].includes(r.status)).length >= MAX_RICHIESTE) throw new Error('Hai già fatto 3 richieste per questo mese.');
       const avvisi = controllaRegole(db, u.staffId, date, kind);
@@ -177,18 +175,6 @@ function backendDemo() {
       db.notifiche.push({ id: nextId++, staff_id: r.staff_id, kind: 'richiesta', created_at: new Date().toISOString(), read_at: null,
         text: `La tua richiesta ${lbl} del ${r.date.slice(8, 10)}/${r.date.slice(5, 7)} è stata ${accetta ? 'accettata.' : 'rifiutata.'}${mot ? ' Motivo: ' + mot : ''}` });
       salva();
-    },
-    async impostaRichieste(y, m, aperto) {
-      await this.salvaMese(y, m, { requests_open: aperto });
-      if (aperto) {
-        db.notifiche = db.notifiche || [];
-        const sc = scadenzaRichieste(y, m);
-        for (const p of db.staff.filter((x) => x.role === 'operator')) {
-          db.notifiche.push({ id: nextId++, staff_id: p.id, kind: 'richieste', created_at: new Date().toISOString(), read_at: null,
-            text: `Sono aperte le richieste di ${MESI_IT[m - 1]} ${y}: puoi inserirle entro il ${sc.slice(8, 10)}/${sc.slice(5, 7)} (massimo 3, riposi e turni).` });
-        }
-        salva();
-      }
     },
     cambiaRuoloDemo(r) { ruolo = r; scrivi('turni-demo-ruolo', r); },
     async caricaMese(y, m) {
@@ -342,7 +328,7 @@ async function backendSupabase() {
         sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active,start_date,end_date').then(errore),
         sb.from('shifts').select('id,staff_id,date,kind,requested,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('events').select('id,date,kind,label,start_time,end_time').gte('date', da).lte('date', a).then(errore),
-        sb.from('months').select('year,month,status,notes,requests_open').eq('year', y).eq('month', m).maybeSingle().then(errore),
+        sb.from('months').select('year,month,status,notes').eq('year', y).eq('month', m).maybeSingle().then(errore),
       ]);
       return { staff, shifts, events, month: mese || { year: y, month: m, status: 'draft', notes: '' } };
     },
@@ -402,7 +388,6 @@ async function backendSupabase() {
     async inviaRichiesta(date, kind, conferma = false) { return errore(await sb.rpc('invia_richiesta', { p_date: date, p_kind: kind, p_conferma: conferma })); },
     async annullaRichiesta(id) { errore(await sb.rpc('annulla_richiesta', { p_id: id })); },
     async rispondiRichiesta(id, accetta, motivo = '') { errore(await sb.rpc('rispondi_richiesta', { p_id: id, p_accetta: accetta, p_motivo: motivo || null })); },
-    async impostaRichieste(y, m, aperto) { errore(await sb.rpc('imposta_richieste', { p_year: y, p_month: m, p_aperto: aperto })); },
     async aggiungiEvento(e) { errore(await sb.from('events').insert(e)); },
     async eliminaEvento(id) { errore(await sb.from('events').delete().eq('id', id)); },
   };

@@ -794,8 +794,8 @@ grant select on public.notifications, public.sick_reports to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 16. Richieste di riposo o di turno
---     Marie apre le richieste di un mese; ogni operatore può inviarne al massimo 3 (riposi e turni insieme)
---     entro il 20 del mese prima.
+--     Le richieste di un mese sono SEMPRE aperte: dal 1 ottobre dell'anno prima fino alla mezzanotte (ora
+--     italiana) del 20 del mese prima. Ogni operatore può inviarne al massimo 3 per mese (riposi e turni insieme).
 --     - Regole che BLOCCANO la richiesta: giorno già occupato, turno già chiesto da un altro collega
 --       (vince chi chiede prima), troppi riposi nello stesso giorno (2; d'estate 1), limite di 3 richieste.
 --     - Regole che AVVISANO: mattina dopo un pomeriggio, più di due notti di fila, più di 4 giorni di
@@ -825,9 +825,19 @@ create unique index if not exists requests_attiva_uq on public.requests (staff_i
 -- oggi, all'ora italiana
 create or replace function public.oggi() returns date language sql stable as $$ select (now() at time zone 'Europe/Rome')::date; $$;
 
--- ultimo giorno per inserire le richieste di un mese: il 20 del mese prima
+-- ultimo giorno per inserire le richieste di un mese: il 20 del mese prima (fino a mezzanotte, ora italiana)
 create or replace function public.richieste_scadenza(p_year int, p_month int) returns date
 language sql immutable as $$ select (make_date(p_year, p_month, 1) - interval '1 month')::date + 19; $$;
+
+-- primo giorno in cui si possono inserire le richieste di un mese: il 1 ottobre dell'anno prima
+create or replace function public.richieste_inizio(p_year int, p_month int) returns date
+language sql immutable as $$ select make_date(p_year - 1, 10, 1); $$;
+
+-- le richieste di quel mese sono aperte adesso? (la data è sempre quella italiana: la scadenza scatta a mezzanotte di Roma)
+create or replace function public.richieste_aperte(p_year int, p_month int) returns boolean
+language sql stable as $$
+  select public.oggi() between public.richieste_inizio(p_year, p_month) and public.richieste_scadenza(p_year, p_month);
+$$;
 
 -- Cosa fa la persona in quel giorno: il suo turno principale, oppure la richiesta in attesa
 create or replace function public.tipo_giorno(p_staff bigint, p_date date, p_escludi bigint default null)
@@ -913,7 +923,7 @@ create or replace function public.nome_mese(p_month int) returns text language s
   select (array['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'])[p_month];
 $$;
 
--- Mesi per cui le richieste sono aperte adesso
+-- Mesi per cui le richieste sono aperte adesso (nessuno deve aprirle: valgono le date)
 create or replace function public.mesi_richieste()
 returns table (year int, month int, scadenza date)
 language sql
@@ -921,11 +931,11 @@ stable
 security definer
 set search_path = public
 as $$
-  select m.year, m.month, public.richieste_scadenza(m.year, m.month)
-    from public.months m
-   where m.requests_open and public.is_staff_member()
-     and public.oggi() <= public.richieste_scadenza(m.year, m.month)
-   order by m.year, m.month;
+  select extract(year from d)::int, extract(month from d)::int, public.richieste_scadenza(extract(year from d)::int, extract(month from d)::int)
+    from generate_series(date_trunc('month', public.oggi())::date, (date_trunc('month', public.oggi()) + interval '26 months')::date, interval '1 month') g(d)
+   where public.is_staff_member()
+     and public.richieste_aperte(extract(year from d)::int, extract(month from d)::int)
+   order by 1, 2;
 $$;
 
 -- L'operatore invia una richiesta. Se qualche regola avvisa e p_conferma è falso, l'errore inizia con
@@ -942,10 +952,8 @@ begin
   if v_staff is null then raise exception 'Accesso non valido.' using errcode = '42501'; end if;
   if p_date is null or p_kind not in ('RR','M','P','N') then raise exception 'Richiesta non valida.' using errcode = '22023'; end if;
   perform pg_advisory_xact_lock(hashtext('richieste'));
-  if not exists (select 1 from public.months m
-                  where m.year = extract(year from p_date)::int and m.month = extract(month from p_date)::int
-                    and m.requests_open and public.oggi() <= public.richieste_scadenza(m.year, m.month)) then
-    raise exception 'Le richieste per questo mese non sono aperte.' using errcode = '22023';
+  if not public.richieste_aperte(extract(year from p_date)::int, extract(month from p_date)::int) then
+    raise exception 'Le richieste per questo mese non sono aperte: si possono fare dal 1 ottobre dell''anno prima fino al 20 del mese prima.' using errcode = '22023';
   end if;
   select count(*) into v_n from public.requests r
    where r.staff_id = v_staff and r.status in ('pending','accepted')
@@ -1049,33 +1057,13 @@ begin
 end;
 $$;
 
--- Marie apre o chiude le richieste di un mese (all'apertura avvisa tutti gli operatori)
-create or replace function public.imposta_richieste(p_year int, p_month int, p_aperto boolean)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
-  insert into public.months (year, month, requests_open) values (p_year, p_month, p_aperto)
-  on conflict (year, month) do update set requests_open = excluded.requests_open;
-  if p_aperto then
-    insert into public.notifications (staff_id, kind, text, data)
-    select s.id, 'richieste',
-           'Sono aperte le richieste di ' || public.nome_mese(p_month) || ' ' || p_year || ': puoi inserirle entro il ' ||
-           to_char(public.richieste_scadenza(p_year, p_month), 'DD/MM') || ' (massimo 3, riposi e turni).',
-           jsonb_build_object('year', p_year, 'month', p_month)
-      from public.staff s
-     where s.active and s.role = 'operator' and (s.end_date is null or s.end_date >= current_date);
-  end if;
-end;
-$$;
+-- (niente più apertura manuale da parte di Marie)
+drop function if exists public.imposta_richieste(int, int, boolean);
 
 revoke all on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean), public.annulla_richiesta(bigint),
-  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.imposta_richieste(int, int, boolean) from public;
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze() from public;
 grant execute on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean), public.annulla_richiesta(bigint),
-  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.imposta_richieste(int, int, boolean) to authenticated;
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze() to authenticated;
 
 -- Tutti i membri del personale vedono tutte le richieste
 alter table public.requests enable row level security;

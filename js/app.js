@@ -4,6 +4,7 @@ import { renderGrid, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from
 import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
+import { scadenzaRichieste } from './richieste.js';
 
 const $ = (id) => document.getElementById(id);
 const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
@@ -127,7 +128,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v15`;
+  $('utente').textContent = `${stato.utente.name} · v16`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -164,6 +165,16 @@ function richiestePerFoglio() {
   }));
 }
 
+// perché le richieste del mese guardato sono chiuse (scadute oppure non ancora aperte)
+function spiegaChiuso() {
+  const primo = stato.mesiAperti[0];
+  const nome = `${nomeMese(stato.m).toLowerCase()} ${stato.y}`;
+  if (!primo) return `Le richieste di ${nome} sono chiuse.`;
+  const passato = stato.y * 12 + stato.m < primo.year * 12 + primo.month;
+  return passato
+    ? `Le richieste di ${nome} sono chiuse (si chiudevano a mezzanotte del 20 del mese prima). Le più vicine ancora aperte sono quelle di ${nomeMese(primo.month).toLowerCase()} ${primo.year} (fino al ${primo.scadenza.slice(8, 10)}/${primo.scadenza.slice(5, 7)}).`
+    : `Le richieste di ${nome} non si sono ancora aperte: si aprono il 1 ottobre ${stato.y - 1}.`;
+}
 const meseAperto = (y, m) => stato.mesiAperti.find((x) => x.year === y && x.month === m) || null;
 
 function disegna() {
@@ -189,10 +200,9 @@ function disegna() {
   if (!isCoord() && stato.mesiErr) {
     mostraMessaggio('Non riesco a leggere quali richieste sono aperte: ' + stato.mesiErr);
   } else if (!isCoord() && !aperto && stato.mesiAperti.length) {
-    const el = stato.mesiAperti.map((x) => `${nomeMese(x.month).toLowerCase()} ${x.year} (entro il ${x.scadenza.slice(8, 10)}/${x.scadenza.slice(5, 7)})`).join(', ');
-    mostraMessaggio(`Le richieste di ${nomeMese(stato.m).toLowerCase()} non sono aperte. Sono aperte quelle di: ${el}. Vai a quel mese e clicca su un giorno della tua riga.`);
+    mostraMessaggio(spiegaChiuso());
   } else if (!isCoord() && aperto) {
-    mostraMessaggio(`Richieste aperte fino al ${aperto.scadenza.slice(8, 10)}/${aperto.scadenza.slice(5, 7)}: clicca su un giorno della tua riga per chiedere un riposo o un turno. ` + (pubblicato ? '' : 'Piano in preparazione: per ora vedi solo ferie, permessi e richieste di tutti.'));
+    mostraMessaggio(`Richieste aperte fino a mezzanotte del ${aperto.scadenza.slice(8, 10)}/${aperto.scadenza.slice(5, 7)}: clicca su un giorno della tua riga per chiedere un riposo o un turno. ` + (pubblicato ? '' : 'Piano in preparazione: per ora vedi solo ferie, permessi e richieste di tutti.'));
   }
   $('foglio').classList.toggle('richiedibile', !isCoord() && !!aperto);
   $('btn-pdf').hidden = !isCoord() && !pubblicato;
@@ -309,22 +319,58 @@ $('consensi').addEventListener('click', async (ev) => {
 });
 
 // ------------------------------------------------------------ notifiche nell'app
+const quando = (iso) => {
+  const d = new Date(iso), f = (o) => new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', ...o }).format(d);
+  const giorno = (x) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome' }).format(x);
+  const oggi = new Date(), ieri = new Date(Date.now() - 864e5);
+  if (giorno(d) === giorno(oggi)) return `oggi ${f({ hour: '2-digit', minute: '2-digit' })}`;
+  if (giorno(d) === giorno(ieri)) return `ieri ${f({ hour: '2-digit', minute: '2-digit' })}`;
+  return f({ day: '2-digit', month: '2-digit' });
+};
 function disegnaNotifiche() {
-  const box = $('notifiche');
-  box.innerHTML = stato.notifiche.map((n) => `<div class="consenso notifica" role="status"><p>${esc(n.text)}</p>
-    <div class="consenso-azioni"><button data-letta="${n.id}">Ok, letto</button></div></div>`).join('');
-  box.hidden = !stato.notifiche.length;
+  const n = stato.notifiche.length;
+  const num = $('notifiche-num');
+  num.hidden = !n; num.textContent = n > 99 ? '99+' : String(n);
+  $('btn-notifiche').classList.toggle('con-notifiche', n > 0);
+  $('btn-notifiche').setAttribute('aria-label', n ? `Notifiche: ${n} da leggere` : 'Notifiche: nessuna da leggere');
+  $('notifiche-tutte').hidden = !n;
+  $('notifiche-lista').innerHTML = n
+    ? stato.notifiche.map((x) => `<li><div class="pn-testo"><p>${esc(x.text)}</p><span class="muted">${esc(quando(x.created_at))}</span></div>
+        <div class="pn-az">${/^richiest/.test(x.kind) ? `<button type="button" class="link" data-apri-ric="${x.id}">Apri richieste</button>` : ''}<button type="button" class="link" data-letta="${x.id}">Letta</button></div></li>`).join('')
+    : '<li class="vuota">Nessuna notifica.</li>';
 }
-$('notifiche').addEventListener('click', async (ev) => {
-  const b = ev.target.closest('button[data-letta]'); if (!b) return;
-  try { await stato.be.segnaNotificaLetta(+b.dataset.letta); } catch (e) { alert(messaggio(e)); }
-  await carica();
+function posizionaPannello() {
+  const r = $('btn-notifiche').getBoundingClientRect();
+  $('pannello-notifiche').style.top = `${Math.round(r.bottom + 6)}px`;
+}
+function pannelloNotifiche(apri) {
+  const pn = $('pannello-notifiche');
+  const aperto = apri ?? pn.hidden;
+  if (aperto) posizionaPannello();
+  pn.hidden = !aperto;
+  $('btn-notifiche').setAttribute('aria-expanded', String(aperto));
+}
+$('btn-notifiche').onclick = (ev) => { ev.stopPropagation(); pannelloNotifiche(); };
+document.addEventListener('click', (ev) => { if (!$('pannello-notifiche').hidden && !ev.composedPath().some((el) => el.id === 'pannello-notifiche' || el.id === 'btn-notifiche')) pannelloNotifiche(false); });   // composedPath: il bottone cliccato può sparire dalla lista prima di arrivare qui
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('pannello-notifiche').hidden) pannelloNotifiche(false); });
+window.addEventListener('resize', () => { if (!$('pannello-notifiche').hidden) posizionaPannello(); });
+async function segnaLette(ids) {
+  try { for (const id of ids) await stato.be.segnaNotificaLetta(id); } catch (e) { alert(messaggio(e)); }
+  try { stato.notifiche = await stato.be.elencaNotifiche(); } catch { /* ignora */ }
+  disegnaNotifiche();
+}
+$('notifiche-lista').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  if (b.dataset.letta) await segnaLette([+b.dataset.letta]);
+  else if (b.dataset.apriRic) { pannelloNotifiche(false); await segnaLette([+b.dataset.apriRic]); apriRichieste(); }
 });
+$('notifiche-tutte').onclick = () => segnaLette(stato.notifiche.map((x) => x.id));
 
 // ------------------------------------------------------------ richieste di riposo o di turno
 const TIPO_RICHIESTA = { RR: 'Riposo', M: 'Mattina', P: 'Pomeriggio', N: 'Notte' };
 const STATO_RICHIESTA = { pending: 'In attesa', accepted: 'Accettata', rejected: 'Rifiutata' };
 const MAX_RICHIESTE = 3;
+const scadenzaTesto = (y, m) => { const sc = scadenzaRichieste(y, m); return `${sc.slice(8, 10)}/${sc.slice(5, 7)}/${sc.slice(0, 4)}`; };
 let ricMeseOp = null;                                  // mese scelto dall'operatore: { year, month, scadenza }
 function ricErrore(t) { $('ric-err').textContent = t || ''; $('ric-err').hidden = !t; }
 const ricMese = () => (isCoord() ? { year: stato.y, month: stato.m } : (ricMeseOp || { year: stato.y, month: stato.m }));
@@ -346,8 +392,8 @@ async function apriRichieste(dataScelta = null) {
     if (dataScelta && ricMeseOp && ricMeseOp.year === +dataScelta.slice(0, 4) && ricMeseOp.month === +dataScelta.slice(5, 7)) $('ric-data').value = dataScelta;
     $('ric-op').hidden = !mesi.length;
     $('ric-testo').textContent = mesi.length
-      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese. Ferie e permessi sono un'altra cosa. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Le richieste non esaminate entro il 20 valgono come accettate. Qui vedi anche quelle dei colleghi.`
-      : 'Al momento le richieste non sono aperte: Marie le apre prima di ogni mese e ti avvisa.';
+      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese. Ferie e permessi sono un'altra cosa. Le richieste di un mese si aprono il 1 ottobre dell'anno prima e si chiudono a mezzanotte del 20 del mese prima. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Le richieste non esaminate entro il 20 valgono come accettate. Qui vedi anche quelle dei colleghi.`
+      : 'Per questo mese le richieste sono chiuse: si possono fare dal 1 ottobre dell\'anno prima fino a mezzanotte del 20 del mese prima.';
   }
   await disegnaRichieste();
   if (!$('dlg-richieste').open) $('dlg-richieste').showModal();
@@ -361,13 +407,8 @@ async function disegnaRichieste() {
   try { righe = await stato.be.elencaRichieste(mese.year, mese.month); } catch (e) { ricErrore(messaggio(e)); }
   if (mese.year === stato.y && mese.month === stato.m) stato.richieste = righe;
   if (isCoord()) {
-    const aperto = !!stato.dati?.month?.requests_open;
-    $('ric-stato').innerHTML = aperto
-      ? `Le richieste sono <b>aperte</b>: gli operatori possono inserirle entro il 20 del mese prima.`
-      : `Le richieste sono <b>chiuse</b>: gli operatori non possono inserirne.`;
-    $('ric-apri').hidden = false;
-    $('ric-apri').textContent = aperto ? 'Chiudi le richieste' : 'Apri le richieste e avvisa gli operatori';
-    $('ric-apri').className = aperto ? '' : 'primario';
+    $('ric-stato').innerHTML = `Le richieste di questo mese sono sempre aperte: gli operatori le possono inserire dal 1 ottobre dell'anno prima fino a mezzanotte (ora italiana) del <b>${scadenzaTesto(mese.year, mese.month)}</b>.`;
+    $('ric-apri').hidden = true;
   } else {
     const d0 = `${mese.year}-${pad(mese.month)}-01`, d1 = `${mese.year}-${pad(mese.month)}-${pad(new Date(mese.year, mese.month, 0).getDate())}`;
     $('ric-data').min = d0; $('ric-data').max = d1;
@@ -415,14 +456,6 @@ $('ric-invia').onclick = async () => {
     }
   } catch (e) { return ricErrore(messaggio(e)); }
   await carica(); await disegnaRichieste();
-};
-$('ric-apri').onclick = async () => {
-  ricErrore('');
-  try {
-    await stato.be.impostaRichieste(stato.y, stato.m, !stato.dati.month.requests_open);
-    stato.dati = await stato.be.caricaMese(stato.y, stato.m);
-  } catch (e) { return ricErrore(messaggio(e)); }
-  await disegnaRichieste();
 };
 $('ric-lista').addEventListener('click', async (ev) => {
   const b = ev.target.closest('button'); if (!b) return;
@@ -513,7 +546,7 @@ $('foglio').addEventListener('click', (ev) => {
     if (!c || +c.dataset.p !== stato.utente.staffId) return;
     if (!meseAperto(+c.dataset.d.slice(0, 4), +c.dataset.d.slice(5, 7))) {
       alert(stato.mesiErr ? 'Non riesco a leggere quali richieste sono aperte: ' + stato.mesiErr
-        : `Le richieste di ${nomeMese(stato.m).toLowerCase()} ${stato.y} non sono aperte (Marie le apre prima di ogni mese e ti avvisa; si chiudono il 20 del mese prima).`);
+        : spiegaChiuso());
       return;
     }
     apriRichieste(c.dataset.d);
