@@ -472,3 +472,17 @@ as $$
 $$;
 revoke all on function public.elenco_personale() from public;
 grant execute on function public.elenco_personale() to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 13. Permessi sulle tabelle per la Data API (l'app parla col database così)
+--     Si assegnano tabella per tabella, così il progetto funziona anche con l'opzione
+--     "Grant API access to new tables automatically" DISATTIVATA (scelta consigliata).
+--     Chi non ha fatto l'accesso (anon) non ha alcun permesso sulle tabelle; chi lo ha fatto
+--     può comunque fare solo ciò che le regole di accesso per riga (sezioni 8 e 9) consentono.
+-- ---------------------------------------------------------------------
+grant usage on schema public to anon, authenticated;
+revoke all on public.staff, public.months, public.shifts, public.events, public.unlocks, public.keepalive from anon, authenticated;
+grant select, insert, update, delete on public.months, public.shifts, public.events to authenticated;
+grant select on public.unlocks to authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date) on public.staff to authenticated;
+grant insert, update, delete on public.staff to authenticated;
