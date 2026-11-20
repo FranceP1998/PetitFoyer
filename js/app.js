@@ -127,7 +127,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = stato.utente.name;
+  $('utente').textContent = `${stato.utente.name} · v15`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -144,7 +144,8 @@ async function carica() {
   try { stato.notifiche = await stato.be.elencaNotifiche(); } catch { stato.notifiche = []; }
   try { stato.malattie = isCoord() ? await stato.be.elencaMalattie() : []; } catch { stato.malattie = []; }
   try { stato.richieste = await stato.be.elencaRichieste(stato.y, stato.m); } catch { stato.richieste = []; }
-  try { stato.mesiAperti = isCoord() ? [] : await stato.be.mesiRichieste(); } catch { stato.mesiAperti = []; }
+  stato.mesiErr = '';
+  try { stato.mesiAperti = isCoord() ? [] : await stato.be.mesiRichieste(); } catch (e) { stato.mesiAperti = []; stato.mesiErr = messaggio(e); }
   disegna();
 }
 
@@ -185,7 +186,12 @@ function disegna() {
     : (isCoord() && !pubblicato ? 'Bozza: gli operatori ne vedono solo ferie, permessi e richieste, finché non la pubblichi.' : ''));
   $('pagina').hidden = false;
   const aperto = meseAperto(stato.y, stato.m);
-  if (!isCoord() && aperto) {
+  if (!isCoord() && stato.mesiErr) {
+    mostraMessaggio('Non riesco a leggere quali richieste sono aperte: ' + stato.mesiErr);
+  } else if (!isCoord() && !aperto && stato.mesiAperti.length) {
+    const el = stato.mesiAperti.map((x) => `${nomeMese(x.month).toLowerCase()} ${x.year} (entro il ${x.scadenza.slice(8, 10)}/${x.scadenza.slice(5, 7)})`).join(', ');
+    mostraMessaggio(`Le richieste di ${nomeMese(stato.m).toLowerCase()} non sono aperte. Sono aperte quelle di: ${el}. Vai a quel mese e clicca su un giorno della tua riga.`);
+  } else if (!isCoord() && aperto) {
     mostraMessaggio(`Richieste aperte fino al ${aperto.scadenza.slice(8, 10)}/${aperto.scadenza.slice(5, 7)}: clicca su un giorno della tua riga per chiedere un riposo o un turno. ` + (pubblicato ? '' : 'Piano in preparazione: per ora vedi solo ferie, permessi e richieste di tutti.'));
   }
   $('foglio').classList.toggle('richiedibile', !isCoord() && !!aperto);
@@ -505,7 +511,11 @@ $('foglio').addEventListener('click', (ev) => {
   if (!isCoord()) {
     const c = ev.target.closest('td[data-p]');
     if (!c || +c.dataset.p !== stato.utente.staffId) return;
-    if (!meseAperto(+c.dataset.d.slice(0, 4), +c.dataset.d.slice(5, 7))) return;
+    if (!meseAperto(+c.dataset.d.slice(0, 4), +c.dataset.d.slice(5, 7))) {
+      alert(stato.mesiErr ? 'Non riesco a leggere quali richieste sono aperte: ' + stato.mesiErr
+        : `Le richieste di ${nomeMese(stato.m).toLowerCase()} ${stato.y} non sono aperte (Marie le apre prima di ogni mese e ti avvisa; si chiudono il 20 del mese prima).`);
+      return;
+    }
     apriRichieste(c.dataset.d);
     return;
   }
