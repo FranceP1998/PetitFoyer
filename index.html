@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Turni Petit Foyer</title>
+  <meta name="theme-color" content="#fff7cc">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Turni">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/print.css" media="print">
+</head>
+<body>
+  <div id="demo-banner" class="no-print" hidden>
+    <span><b>Modalità demo</b> — dati di esempio, non è il piano vero. Le modifiche restano solo su questo dispositivo.</span>
+    <label>Vedi come
+      <select id="demo-ruolo"><option value="coordinator">Coordinatrice (Marie)</option><option value="operator">Operatore (Domenico)</option></select>
+    </label>
+    <button id="demo-reset" class="link">Ripristina esempio</button>
+  </div>
+
+  <!-- ACCESSO -->
+  <section id="login" class="no-print" hidden>
+    <form id="login-form" class="card">
+      <h1>Turni Petit Foyer</h1>
+      <p class="muted">Accedi con l'email e la password che ti ha dato la coordinatrice.</p>
+      <label>Email<input id="login-email" type="email" autocomplete="username" required></label>
+      <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
+      <p id="login-err" class="err" role="alert" hidden></p>
+      <button class="primario" type="submit">Accedi</button>
+    </form>
+  </section>
+
+  <!-- APP -->
+  <div id="app" hidden>
+    <header class="toolbar no-print">
+      <div class="nav-mese">
+        <button id="prev" aria-label="Mese precedente">‹</button>
+        <h1 id="titolo-mese">—</h1>
+        <button id="next" aria-label="Mese successivo">›</button>
+        <span id="badge-stato" class="badge"></span>
+      </div>
+      <div class="azioni">
+        <button id="btn-modifica" class="solo-coord" hidden>Modifica</button>
+        <button id="btn-eventi" class="solo-coord" hidden>Eventi del mese</button>
+        <button id="btn-pubblica" class="solo-coord" hidden>Pubblica</button>
+        <button id="btn-stampa" class="primario">Stampa</button>
+        <span id="utente" class="muted"></span>
+        <button id="btn-esci" class="link">Esci</button>
+      </div>
+    </header>
+
+    <p id="messaggio" class="no-print avviso" hidden></p>
+    <section id="consensi" class="no-print" hidden></section>
+
+    <main id="pagina" class="pagina">
+      <div class="intestazione">
+        <div class="marchio">
+          <img class="logo" src="assets/logo.png" alt="" onerror="this.remove()">
+          <div><div class="marchio-nome">LA LIBELLULA</div><div class="marchio-sotto">Società Cooperativa Sociale</div></div>
+        </div>
+        <div class="titolo-foglio">Programmazione mensile dei turni</div>
+      </div>
+      <div class="servizio">
+        <span><b>Servizio:</b> <i id="f-servizio" class="riga-punti"></i></span>
+        <span><b>Mese di:</b> <i id="f-mese" class="riga-punti"></i></span>
+      </div>
+      <ul id="legenda" class="legenda"></ul>
+      <div class="scroll-foglio"><div id="foglio"></div></div>
+      <div class="osservazioni">
+        <b>Osservazioni:</b>
+        <span id="osservazioni-testo" class="riga-punti"></span>
+        <textarea id="osservazioni-edit" class="no-print" rows="2" hidden placeholder="Osservazioni del mese"></textarea>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modifica cella -->
+  <dialog id="dlg-cella" class="no-print">
+    <form method="dialog" id="form-cella">
+      <h2 id="cella-titolo"></h2>
+      <p class="muted" id="cella-aiuto">Tocca i simboli da mettere in questa casella.</p>
+      <div id="cella-chips" class="chips"></div>
+      <div id="cella-blocco" class="blocco" hidden>
+        <p id="cella-blocco-testo"></p>
+        <button type="button" id="cella-consenso" class="primario"></button>
+      </div>
+      <label class="check"><input type="checkbox" id="cella-richiesto"> Richiesto dall'operatore (R piccola a pedice)</label>
+      <div class="dlg-azioni">
+        <button type="button" id="cella-svuota" class="link">Svuota</button>
+        <span class="spazio"></span>
+        <button type="button" id="cella-annulla">Annulla</button>
+        <button type="submit" class="primario" id="cella-salva" value="ok">Salva</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Eventi -->
+  <dialog id="dlg-eventi" class="no-print">
+    <form method="dialog">
+      <h2>Eventi del mese</h2>
+      <p class="muted">Collettivo, giorni di copertura spesa e altre note che compaiono in testa al foglio.</p>
+      <ul id="eventi-lista" class="eventi-lista"></ul>
+      <fieldset class="nuovo-evento">
+        <legend>Aggiungi</legend>
+        <label>Tipo
+          <select id="ev-kind"><option value="collettivo">Collettivo</option><option value="spesa">Copertura spesa</option><option value="altro">Altro</option></select>
+        </label>
+        <label>Data<input id="ev-date" type="date" required></label>
+        <label>Dalle<input id="ev-start" type="time"></label>
+        <label>Alle<input id="ev-end" type="time"></label>
+        <label class="largo">Nota<input id="ev-label" type="text" placeholder="es. con Raffaella"></label>
+        <button type="button" id="ev-aggiungi" class="primario">Aggiungi</button>
+      </fieldset>
+      <div class="dlg-azioni"><span class="spazio"></span><button value="chiudi">Chiudi</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

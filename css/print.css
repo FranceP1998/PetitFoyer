@@ -1,0 +1,42 @@
+/* Stampa: A4 orizzontale, stesso aspetto del foglio cartaceo. Niente campiture scure
+   (le copisterie non le stampano bene): solo colori chiari per domeniche, collettivo e spesa. */
+@page { size: A4 landscape; margin: 7mm 9mm; }
+:root { --s: 7.3mm; --nome: 32mm; --gap: 1.8mm; }   /* caselle quadrate: lato 7,3 mm; striscia bianca tra operatori */
+
+html, body { background: #fff !important; }
+.no-print, #demo-banner, .toolbar, #login, .avviso { display: none !important; }
+#app { display: block !important; }
+.pagina { padding: 0; max-width: none; }
+.scroll-foglio { overflow: visible; }
+
+.intestazione { padding-bottom: 3mm; }
+.marchio .logo { height: 11mm; }
+.marchio-nome { font-size: 13pt; }
+.marchio-sotto { font-size: 7.5pt; }
+.titolo-foglio { font-size: 11pt; }
+.servizio { margin: 5mm 1mm 3mm; font-size: 10pt; }
+.legenda { font-size: 9pt; margin: 2mm 0 3mm; gap: 1mm; }
+
+table.foglio { font-size: 8.5pt; page-break-inside: avoid; }
+table.foglio th.nome { font-size: 8.5pt; padding: 0 1.5mm; }
+.lett { font-size: 9pt; }
+.big { font-size: 20pt; }
+.big.perm { font-size: 13pt; }
+.trattino { font-size: 14pt; }
+sub.req { font-size: 6pt; }
+svg.spesa { width: 4.2mm; height: 4.2mm; }
+td.notte-inizia, td.notte-fine {
+  background-image: linear-gradient(to top left, transparent calc(50% - .6px), #000 calc(50% - .6px), #000 calc(50% + .6px), transparent calc(50% + .6px));
+}
+td.notte-inizia sub.req { right: .8mm; bottom: .4mm; }
+
+.osservazioni { margin-top: 4mm; font-size: 9.5pt; }
+.osservazioni textarea { display: none; }
+
+/* conserva i colori chiari anche in stampa */
+* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+table.foglio tr.mia th.nome { background: #fff; }
+
+table.foglio .h-numeri th.extra { font-size: 6.5pt; letter-spacing: -.02em; }
+td.prot::after { display: none !important; }
+#consensi { display: none !important; }
