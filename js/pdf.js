@@ -4,7 +4,7 @@
 // striscia bianca tra un operatore e l'altro, sbarra della notte, domeniche gialle, ecc.
 
 import { giorniDelMese, meseDopo, nomeMese, pad, iso, righeLegenda } from './grid.js';
-import { descriviCella, notteFinisceDa, inServizio } from './cella.js';
+import { descriviCella, notteFinisceDa, muDaIeri, inServizio } from './cella.js';
 import { LARGHEZZE } from './pdf-metrics.js';
 
 const MM = 72 / 25.4;               // punti PDF per millimetro
@@ -254,7 +254,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
       const kinds = get(p.id, c.data);
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
-      const d = descriviCella(kinds, notteFinisce);
+      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)));
       const x0 = xs(j), cx = x0 + s / 2;
 
       if (d.doppia) {
@@ -282,7 +282,14 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
       // riga alta (mattina) e riga bassa (pomeriggio)
       disegnaGruppo(pg, d.alta.map((q) => parteDi(q, s, ptLett, ptSub)), cx, yM + s / 2, s);
       disegnaGruppo(pg, d.bassa.map((q) => parteDi(q, s, ptLett, ptSub)), cx, yP + s / 2, s);
-      if (d.notteIniziaDelta) pg.testo(d.notteIniziaDelta, x0 + 0.1 * s, yP + 0.36 * s, 'B', ptSub);
+      // ore in più/meno agli estremi del turno: a sinistra all'inizio, a destra alla fine
+      const ptDel = 0.27 * s * MM;
+      const lati = (l, yRiga, notte) => {
+        if (l.s) pg.testo(l.s, x0 + 0.07 * s, yRiga + 0.32 * s, 'B', ptDel);
+        if (l.e) pg.testo(l.e, x0 + s - 0.07 * s - lMM(l.e, 'B', ptDel), yRiga + (notte ? 0.6 : 0.32) * s, 'B', ptDel);
+      };
+      lati(d.latiAlta, yM, false);
+      lati(d.latiBassa, yP, d.notteInizia);
       if (d.notteIniziaRichiesta) {
         pg.testo('R', x0 + s - 0.12 * s - lMM('R', 'B', ptSub), yP + s - 0.14 * s, 'B', ptSub);
       }
@@ -369,7 +376,8 @@ function parteDi(q, s, ptLett, ptSub) {
   if (q.t === 'spesa') return { icona: true, d: 0.575 * s };
   if (q.t === 'rb') return { t: 'RB', f: 'B', pt: 0.33 * s * MM };
   if (q.t === 'piccola') return { t: q.v, f: 'H', pt: ptLett };
-  if (q.t === 'delta') return { t: q.v, f: 'B', pt: ptSub, su: true };
+  if (q.t === 'mu') return { t: 'MU', f: 'H', pt: 0.36 * s * MM };
+  if (q.t === 'musub') return { t: q.v, f: 'B', pt: ptSub, giu: true };
   return { pillola: q.v, s };                                    // orari cerchiati in forma compatta
 }
 

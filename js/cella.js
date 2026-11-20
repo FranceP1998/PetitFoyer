@@ -26,10 +26,20 @@ export function scostamento(e) {
   if (d <= 0) d += 1440;
   return (d - 480) / 60;
 }
+// ore in più/meno AGLI ESTREMI del turno: s = all'inizio (+ se si entra prima), e = alla fine (+ se si esce dopo)
+const diffMin = (x) => (((x + 720) % 1440) + 1440) % 1440 - 720;
+export function latiOrari(e) {
+  if (!STANDARD[e?.kind] || !e.start_time || !e.end_time) return { s: 0, e: 0 };
+  const [a, b] = STANDARD[e.kind];
+  return { s: diffMin(minuti(a) - minuti(e.start_time)) / 60, e: diffMin(minuti(e.end_time) - minuti(b)) / 60 };
+}
 export const etichettaScostamento = (h) => `${h > 0 ? '+' : '−'}${String(Math.abs(h)).replace('.', ',')}`;
 
 // questa notte (iniziata il giorno prima) finisce stamattina? (non se chi la faceva è in malattia)
 export const notteFinisceDa = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N') && !kindsIeri.some((e) => e.kind === 'MU');
+
+// la notte iniziata ieri era una notte saltata per malattia? (stamattina compare "MU" col pedice della notte)
+export const muDaIeri = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N') && kindsIeri.some((e) => e.kind === 'MU');
 
 // '09:30:00' -> '9.30'    '10:00' -> '10'
 export function oraBreve(t) {
@@ -47,14 +57,20 @@ export function durataOre(inizio, fine) {
   return d / 60;
 }
 
-export function descriviCella(kinds, notteFinisce) {
-  const mu = kinds.some((e) => e.kind === 'MU');
-  // in malattia il turno resta registrato ma non si disegna: al suo posto c'è "MU"
-  if (mu) kinds = kinds.filter((e) => !['M', 'P', 'N'].includes(e.kind));
+export function descriviCella(kinds, notteFinisce, muFine = false) {
+  // in malattia il turno resta registrato ma non si disegna: al suo posto c'è "MU" con a pedice
+  // il turno saltato (M, P oppure / per la notte), solo nello spazio che quel turno occupava
+  let muTurno = null;
+  if (kinds.some((e) => e.kind === 'MU')) {
+    muTurno = ['M', 'P', 'N'].find((k) => kinds.some((e) => e.kind === k)) || null;
+    if (muTurno) kinds = kinds.filter((e) => !['M', 'P', 'N', 'MU'].includes(e.kind));
+  }
+  const muOccupa = !!muTurno || muFine;
+  const mP = (v) => [{ t: 'mu' }, { t: 'musub', v }];
   const has = (x) => kinds.find((e) => e.kind === x);
   const notteInizia = has('N') || null;
   const full = FULL_DAY.map(has).find(Boolean) || null;
-  const libera = !notteFinisce && !notteInizia;
+  const libera = !notteFinisce && !notteInizia && !muOccupa;
 
   // turni "in più" disegnati cerchiati: 10-18 (orario fisso) e copertura (orario scelto dalla coordinatrice)
   const ovali = [];
@@ -78,15 +94,23 @@ export function descriviCella(kinds, notteFinisce) {
   // ---- due righe separate
   const alta = [], bassa = [];
   const M = has('M'), P = has('P');
-  if (M) { alta.push({ t: 'lett', v: 'M' }); if (M.requested) alta.push({ t: 'pedice' }); if (scostamento(M)) alta.push({ t: 'delta', v: etichettaScostamento(scostamento(M)) }); }
+  const lab = (h) => (h ? etichettaScostamento(h) : '');
+  const lati = (e) => { const l = latiOrari(e); return { s: lab(l.s), e: lab(l.e) }; };
+  const latiAlta = M ? lati(M) : { s: '', e: '' };
+  const latiBassa = P ? lati(P) : notteInizia ? lati(notteInizia) : { s: '', e: '' };
+  if (M) { alta.push({ t: 'lett', v: 'M' }); if (M.requested) alta.push({ t: 'pedice' }); }
+  if (muTurno === 'M') alta.push(...mP('M'));
+  if (muFine) alta.push(...mP('/'));
   if (has('SPESA')) alta.push({ t: 'spesa' });
   if (has('RB')) alta.push({ t: 'rb' });
-  if (P) { bassa.push({ t: 'lett', v: 'P' }); if (P.requested) bassa.push({ t: 'pedice' }); if (scostamento(P)) bassa.push({ t: 'delta', v: etichettaScostamento(scostamento(P)) }); }
+  if (P) { bassa.push({ t: 'lett', v: 'P' }); if (P.requested) bassa.push({ t: 'pedice' }); }
+  if (muTurno === 'P') bassa.push(...mP('P'));
+  if (muTurno === 'N') bassa.push(...mP('/'));
   if (full) bassa.push({ t: 'piccola', v: { F: 'F', FS: '–', PERM: 'P', R: 'R', RR: 'R', MU: 'MU' }[full.kind] });
 
   // le coperture/10-18 compatte finiscono nella prima riga libera
-  let altaLibera = !M && !has('SPESA') && !has('RB') && !notteFinisce;
-  let bassaLibera = !P && !full && !notteInizia;
+  let altaLibera = !M && !has('SPESA') && !has('RB') && !notteFinisce && muTurno !== 'M' && !muFine;
+  let bassaLibera = !P && !full && !notteInizia && muTurno !== 'P' && muTurno !== 'N';
   for (const o of ovali) {
     const pillola = { t: 'pillola', v: testoOvale(o) };
     if (altaLibera) { alta.push(pillola); altaLibera = false; }
@@ -97,7 +121,7 @@ export function descriviCella(kinds, notteFinisce) {
   return {
     doppia: false, alta, bassa,
     notteInizia: !!notteInizia, notteIniziaRichiesta: !!(notteInizia && notteInizia.requested),
-    notteIniziaDelta: notteInizia && scostamento(notteInizia) ? etichettaScostamento(scostamento(notteInizia)) : '',
+    latiAlta, latiBassa,
     notteFinisce: !!notteFinisce,
   };
 }

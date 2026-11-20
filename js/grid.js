@@ -1,4 +1,4 @@
-import { descriviCella, notteFinisceDa, scostamento, inServizio } from './cella.js';
+import { descriviCella, notteFinisceDa, muDaIeri, scostamento, inServizio } from './cella.js';
 
 // Disegna il foglio turni come tabella HTML (stesso schema del foglio cartaceo):
 // due righe per persona (M sopra, P sotto), giorni in orizzontale, ultima colonna = 1° del mese dopo.
@@ -26,7 +26,8 @@ const parteHtml = (p) => ({
   rb: '<span class="rb">RB</span>',
   piccola: `<span class="lett piccola">${p.v}</span>`,
   pillola: `<span class="pill">${esc(p.v)}</span>`,
-  delta: `<sup class="delta">${p.v}</sup>`,
+  mu: '<span class="lett mu2">MU</span>',
+  musub: `<sub class="req musub">${esc(p.v)}</sub>`,
 }[p.t]);
 
 export function giorniDelMese(y, m) { return new Date(y, m, 0).getDate(); }
@@ -72,10 +73,10 @@ export function righeLegenda(events, y, m, shifts = []) {
   }
   const delMeseTurni = shifts.filter((s) => s.date.startsWith(`${y}-${pad(m)}-`));
   if (delMeseTurni.some((s) => s.kind === 'MU')) {
-    out.push({ cls: 'mugleg', b: 'MU', t: ' – malattia (mutua)', html: '<b>MU</b> – malattia (mutua)' });
+    out.push({ cls: 'mugleg', b: 'MU', t: ' – malattia: a pedice il turno saltato (M mattina, P pomeriggio, / notte)', html: '<b>MU</b> – malattia: a pedice il turno saltato (M mattina, P pomeriggio, / notte)' });
   }
   if (delMeseTurni.some((s) => scostamento(s))) {
-    out.push({ cls: 'deltaleg', b: '+4  /  −1', t: ' – ore in più o in meno rispetto al turno', html: '<b>+4 / −1</b> – ore in più o in meno rispetto al turno' });
+    out.push({ cls: 'deltaleg', b: '+4  /  −1', t: ' – ore in più o in meno: a sinistra all\'inizio del turno, a destra alla fine', html: '<b>+4 / −1</b> – ore in più o in meno: a sinistra all\'inizio del turno, a destra alla fine' });
   }
   return out;
 }
@@ -139,7 +140,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       // notte che finisce stamattina (iniziata il giorno prima)
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
-      const d = descriviCella(kinds, notteFinisce);
+      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)));
       const protCls = editable && kinds.some(eProtetta) ? ' prot' : '';
 
       if (d.doppia) {
@@ -153,8 +154,10 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
         rM += cella('m', txt, `full k-${d.kind}${protCls}`, 2);
         continue; // la riga P non emette nulla: la cella è su due righe
       }
-      rM += cella('m', d.alta.map(parteHtml).join(''), (d.notteFinisce ? 'notte-fine' : '') + protCls);
-      rP += cella('p', d.bassa.map(parteHtml).join('') + (d.notteIniziaRichiesta ? SUB_R : '') + (d.notteIniziaDelta ? `<sup class="delta delta-notte">${d.notteIniziaDelta}</sup>` : ''), (d.notteInizia ? 'notte-inizia' : '') + protCls);
+      // ore in più/meno agli estremi del turno: a sinistra se si entra prima/dopo, a destra se si esce dopo/prima
+      const lati = (l) => (l.s ? `<span class="dl">${l.s}</span>` : '') + (l.e ? `<span class="dr">${l.e}</span>` : '');
+      rM += cella('m', d.alta.map(parteHtml).join('') + lati(d.latiAlta), (d.notteFinisce ? 'notte-fine' : '') + protCls);
+      rP += cella('p', d.bassa.map(parteHtml).join('') + (d.notteIniziaRichiesta ? SUB_R : '') + lati(d.latiBassa), (d.notteInizia ? 'notte-inizia' : '') + protCls);
     }
     return rM + '</tr>' + rP + '</tr>';
   };

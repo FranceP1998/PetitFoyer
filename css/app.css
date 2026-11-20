@@ -201,8 +201,14 @@ body.operatore table.foglio tr.mia > td:last-child { border-right-color: var(--b
 
 /* malattia e ore in più/meno */
 .mu { font-size: calc(var(--s) * .52); font-weight: 400; letter-spacing: -.02em; }
-sup.delta { font-size: calc(var(--s) * .3); font-weight: 800; vertical-align: super; line-height: 0; margin-left: 1px; }
-sup.delta-notte { position: absolute; left: 3px; top: 4px; margin: 0; }
+/* "MU" con a pedice il turno saltato */
+.lett.mu2 { font-size: calc(var(--s) * .36); font-weight: 400; letter-spacing: -.02em; }
+sub.musub { font-size: calc(var(--s) * .27); }
+/* ore in più/meno: a sinistra all'inizio del turno, a destra alla fine */
+.dl, .dr { position: absolute; top: calc(var(--s) * .05); font-size: calc(var(--s) * .26); font-weight: 800; line-height: 1; }
+.dl { left: calc(var(--s) * .07); }
+.dr { right: calc(var(--s) * .07); }
+td.notte-inizia .dr { top: calc(var(--s) * .4); }
 
 /* accesso a passi */
 .card .passo { display: grid; gap: 12px; }
