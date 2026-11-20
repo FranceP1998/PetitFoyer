@@ -403,7 +403,7 @@ create policy unlocks_select on public.unlocks
 --     le leggerà tramite una funzione dedicata.
 -- ---------------------------------------------------------------------
 revoke select on public.staff from anon, authenticated;
-grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date) on public.staff to authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date, senza_weekend) on public.staff to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 11. Registrazione consentita SOLO alle email scritte nella tabella staff
@@ -517,7 +517,7 @@ grant usage on schema public to anon, authenticated;
 revoke all on public.staff, public.months, public.shifts, public.events, public.unlocks, public.keepalive from anon, authenticated;
 grant select, insert, update, delete on public.months, public.shifts, public.events to authenticated;
 grant select on public.unlocks to authenticated;
-grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date) on public.staff to authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date, senza_weekend) on public.staff to authenticated;
 grant insert, update, delete on public.staff to authenticated;
 
 -- ---------------------------------------------------------------------
