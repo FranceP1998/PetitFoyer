@@ -291,7 +291,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
       lati(d.latiAlta, yM, d.notteFinisce);
       lati(d.latiBassa, yP, d.notteInizia);
       if (d.notteFinisceRichiesta) {                                                // notte richiesta: R a destra della sbarra, nella casella dove la notte finisce
-        pg.testo('R', x0 + s - 0.12 * s - lMM('R', 'B', ptSub), yM + s - 0.14 * s, 'B', ptSub);
+        pg.testo('R', x0 + s - 0.14 * s - lMM('R', 'B', ptSub), yM + s - (d.latiAlta.e ? 0.14 : 0.27) * s, 'B', ptSub);
       }
 
       // sbarra della notte: da in basso a sinistra (pomeriggio del giorno N) a in alto a destra (mattina di N+1)

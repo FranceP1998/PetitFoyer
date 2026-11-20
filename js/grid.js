@@ -143,7 +143,12 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
       const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)), notteRichiestaDa(get(p.id, prevIso)));
       const protCls = editable && kinds.some((e) => eProtetta(e) && !e.pending) ? ' prot' : '';
-      const attCls = kinds.some((e) => e.pending) ? (kinds.some((e) => e.pending && e.critica) ? ' in-attesa critica' : ' in-attesa') : '';
+      // richieste in attesa: si segna solo la casella interessata (una notte: in basso il giorno d'inizio e in alto il giorno dopo, dove finisce)
+      const ieri = get(p.id, prevIso);
+      const attM = kinds.filter((e) => e.pending && e.kind === 'M').concat(ieri.filter((e) => e.pending && e.kind === 'N'));
+      const attP = kinds.filter((e) => e.pending && ['P', 'N'].includes(e.kind));
+      const attDoppia = kinds.filter((e) => e.pending);
+      const att = (l) => (l.length ? (l.some((e) => e.critica) ? ' in-attesa critica' : ' in-attesa') : '');
 
       if (d.doppia) {
         const g = d.grande;
@@ -153,13 +158,13 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
           : g.mu ? '<span class="mu">MU</span>'
           : `<span class="big">${g.testo}</span>${g.pedice ? SUB_R : ''}`;
         txt += d.pillole.map((v) => `<span class="pill pill-basso">${esc(v)}</span>`).join('');
-        rM += cella('m', txt, `full k-${d.kind}${protCls}${attCls}`, 2);
+        rM += cella('m', txt, `full k-${d.kind}${protCls}${att(attDoppia)}`, 2);
         continue; // la riga P non emette nulla: la cella è su due righe
       }
       // ore in più/meno agli estremi del turno: a sinistra se si entra prima/dopo, a destra se si esce dopo/prima
       const lati = (l) => (l.s ? `<span class="dl">${l.s}</span>` : '') + (l.e ? `<span class="dr">${l.e}</span>` : '');
-      rM += cella('m', d.alta.map(parteHtml).join('') + (d.notteFinisceRichiesta ? SUB_R_FINE : '') + lati(d.latiAlta), (d.notteFinisce ? 'notte-fine' : '') + protCls + attCls);
-      rP += cella('p', d.bassa.map(parteHtml).join('') + lati(d.latiBassa), (d.notteInizia ? 'notte-inizia' : '') + protCls + attCls);
+      rM += cella('m', d.alta.map(parteHtml).join('') + lati(d.latiAlta) + (d.notteFinisceRichiesta ? SUB_R_FINE : ''), (d.notteFinisce ? 'notte-fine' : '') + protCls + att(attM));
+      rP += cella('p', d.bassa.map(parteHtml).join('') + lati(d.latiBassa), (d.notteInizia ? 'notte-inizia' : '') + protCls + att(attP));
     }
     return rM + '</tr>' + rP + '</tr>';
   };

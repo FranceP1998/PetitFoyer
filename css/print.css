@@ -25,7 +25,8 @@ table.foglio th.nome { font-size: 8.5pt; padding: 0 1.5mm; }
 sub.req { font-size: 6pt; }
 svg.spesa { width: 4.2mm; height: 4.2mm; }
 svg.notti { color: #000; }
-td.notte-fine sub.req.fine-notte { right: .8mm; bottom: .4mm; }
+td.notte-fine sub.req.fine-notte { right: 1mm; bottom: calc(var(--s) * .24); }
+td.notte-fine .dr ~ sub.req.fine-notte { bottom: .4mm; }
 
 .osservazioni { margin-top: 4mm; font-size: 9.5pt; }
 .osservazioni textarea { display: none; }
