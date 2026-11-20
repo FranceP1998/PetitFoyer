@@ -1,0 +1,30 @@
+# Tiene sveglio il progetto Supabase gratuito (che va in pausa dopo ~1 settimana senza attività).
+# Ogni 3 giorni chiama la funzione ping() del database.
+# Servono due "secrets" nel repository: SUPABASE_URL e SUPABASE_ANON_KEY (vedi README).
+name: Ping Supabase (anti-pausa)
+
+on:
+  schedule:
+    - cron: '17 6 */3 * *'      # ogni 3 giorni, alle 06:17 UTC
+    - cron: '43 18 */4 * *'     # secondo ping di riserva, ogni 4 giorni
+  workflow_dispatch:            # si può lanciare anche a mano da Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Chiama ping()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "Secrets mancanti: imposta SUPABASE_URL e SUPABASE_ANON_KEY nel repository."; exit 1
+          fi
+          code=$(curl -sS -o /tmp/risposta.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/rest/v1/rpc/ping" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" -d '{}')
+          echo "Risposta HTTP $code"; cat /tmp/risposta.txt; echo
+          test "$code" = "200"
