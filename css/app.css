@@ -8,6 +8,7 @@
   --arancio: #ffd9a0;          /* giorni di copertura spesa */
   --azzurro: #c9ebf7;          /* giorno del collettivo */
   --mia: #eef6ff;              /* riga della persona che sta guardando */
+  --blu: #1a5fd0;              /* riquadro della riga dell'operatore che guarda il foglio */
   --accento: #2563a8;
   --sfondo: #faf9f6;
   --s: 30px;                  /* lato della casella: le caselle restano QUADRATE */
@@ -73,7 +74,7 @@ button.link { border: 0; background: none; color: var(--accento); padding: 6px 8
 .legenda { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .legenda li { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 1px 6px; border-radius: 4px; }
 .legenda li.collettivo { background: var(--azzurro); }
-.legenda li.spesa { background: var(--giallo); }
+.legenda li.spesa { background: var(--arancio); }     /* stesso colore dell'intestazione dei giorni di copertura spesa */
 .legenda li.rbleg { font-size: 13px; }
 .legenda svg.spesa { width: 16px; height: 16px; }
 
@@ -153,7 +154,6 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 @media (max-width: 720px) {
   .pagina { padding: 8px; }
   :root { --s: 28px; --nome: 84px; --gap: 8px; }
-  table.foglio th.nome, table.foglio th.nome-th { position: sticky; left: 0; z-index: 3; box-shadow: 2px 0 0 var(--linea); }
   .toolbar { padding: 8px; }
   .nav-mese h1 { font-size: 17px; min-width: 8em; }
 }
@@ -171,3 +171,35 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 .consenso.ok { background: #e7f6ea; border-color: #9fd3a8; }
 .consenso-azioni { display: flex; gap: 8px; }
 button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ============ Nomi sempre visibili quando il foglio scorre di lato ============ */
+/* Le celle "sticky" perdono i bordi della tabella: le righe del nome si disegnano con ombre interne. */
+table.foglio th.nome, table.foglio th.nome-th, table.foglio tr.sep td.sep-nome { position: sticky; left: 0; z-index: 3; background: #fff; }
+table.foglio th.nome { border: 0 !important; box-shadow: inset 2px 0 0 var(--linea-forte), inset 0 2px 0 var(--linea-forte), inset 0 -2px 0 var(--linea-forte), 1px 0 0 var(--linea); }
+table.foglio th.nome-th { box-shadow: 1px 0 0 var(--linea); }
+table.foglio tr.mia th.nome { background: var(--mia); }
+
+/* ============ Riga dell'operatore che sta guardando: riquadro BLU ============ */
+body.operatore table.foglio tr.riga-m.mia > th.nome { box-shadow: inset 2px 0 0 var(--blu), inset 0 2px 0 var(--blu), inset 0 -2px 0 var(--blu), 1px 0 0 var(--linea); }
+body.operatore table.foglio tr.riga-m.mia > td { border-top-color: var(--blu); }
+body.operatore table.foglio tr.riga-m.mia > td[rowspan] { border-bottom-color: var(--blu); }
+body.operatore table.foglio tr.riga-p.mia > td { border-bottom-color: var(--blu); }
+body.operatore table.foglio tr.mia > td:last-child { border-right-color: var(--blu); }
+
+/* ============ Turni 10-18 e di copertura: orari dentro un ovale ============ */
+.ovale { display: flex; flex-direction: column; align-items: center; justify-content: space-between; margin: auto;
+  width: calc(var(--s) * .86); height: calc(var(--s) * 1.82); padding: calc(var(--s) * .2) 0; border: 1.6px solid #111; border-radius: 50%;
+  font-weight: 700; font-size: calc(var(--s) * .4); line-height: 1; }
+.ovale.lungo { font-size: calc(var(--s) * .3); }
+.pill { display: inline-block; border: 1.2px solid #111; border-radius: 999px; padding: 2px 3px; font-size: calc(var(--s) * .28); font-weight: 700; line-height: 1; white-space: nowrap; }
+.pill-basso { position: absolute; left: 50%; bottom: calc(var(--s) * .08); transform: translateX(-50%); background: #fff; }
+.sub-ore { font-size: 9px; font-weight: 800; }
+.cop-righe { display: grid; gap: 8px; margin: 12px 0; }
+.cop-righe label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid #e5e3dc; border-radius: 12px; font-size: 14px; }
+.cop-orari { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; font-size: 14px; }
+.cop-orari input { padding: 6px 8px; border: 1px solid #c9c7c0; border-radius: 8px; }
+
+/* malattia e ore in più/meno */
+.mu { font-size: calc(var(--s) * .52); font-weight: 400; letter-spacing: -.02em; }
+sup.delta { font-size: calc(var(--s) * .3); font-weight: 800; vertical-align: super; line-height: 0; margin-left: 1px; }
+sup.delta-notte { position: absolute; left: 3px; top: 4px; margin: 0; }

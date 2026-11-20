@@ -88,6 +88,9 @@
         <p id="cella-blocco-testo"></p>
         <button type="button" id="cella-consenso" class="primario"></button>
       </div>
+      <div id="cella-cop" class="cop-orari" hidden>
+        <span>Copertura dalle</span> <input type="time" id="cop-da" step="900"> <span>alle</span> <input type="time" id="cop-a" step="900">
+      </div>
       <label class="check"><input type="checkbox" id="cella-richiesto"> Richiesto dall'operatore (R piccola a pedice)</label>
       <div class="dlg-azioni">
         <button type="button" id="cella-svuota" class="link">Svuota</button>
@@ -96,6 +99,18 @@
         <button type="submit" class="primario" id="cella-salva" value="ok">Salva</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Copertura di una malattia -->
+  <dialog id="dlg-copertura" class="no-print">
+    <h2>Copertura della malattia</h2>
+    <p class="muted" id="cop-testo"></p>
+    <div id="cop-righe" class="cop-righe"></div>
+    <div class="dlg-azioni">
+      <span class="spazio"></span>
+      <button type="button" id="cop-no">Non ora</button>
+      <button type="button" class="primario" id="cop-si">Applica</button>
+    </div>
   </dialog>
 
   <!-- Eventi -->

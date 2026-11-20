@@ -17,7 +17,7 @@ function intervallo(y, m) {
 
 // ------------------------------------------------------------------ DEMO
 function backendDemo() {
-  const KEY = 'turni-demo-v1';
+  const KEY = 'turni-demo-v3';
   const leggi = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
   const scrivi = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignora */ } };
   let db;
@@ -53,17 +53,23 @@ function backendDemo() {
     },
     async impostaCella(staffId, data, voci) {
       const esistenti = db.shifts.filter((s) => s.staff_id === staffId && s.date === data);
-      const nuovo = new Map(voci.map((v) => [v.kind, !!v.requested]));
-      // da togliere: voci sparite o con la spunta "richiesto" cambiata
-      const daTogliere = esistenti.filter((e) => !nuovo.has(e.kind) || nuovo.get(e.kind) !== !!e.requested);
+      const firma = (v) => `${!!v.requested}|${(v.start_time || '').slice(0, 5)}|${(v.end_time || '').slice(0, 5)}`;
+      const nuovo = new Map(voci.map((v) => [v.kind, firma(v)]));
+      // da togliere: voci sparite o con la spunta "richiesto" / gli orari cambiati
+      const daTogliere = esistenti.filter((e) => !nuovo.has(e.kind) || nuovo.get(e.kind) !== firma(e));
       if (daTogliere.some((e) => PROTETTI.includes(e.kind) || e.requested) && !sbloccoValido(staffId, data)) {
         throw new Error('Casella protetta (ferie, permesso o richiesta accettata): serve il consenso dell\'operatore.');
       }
       const tolti = new Set(daTogliere);
       db.shifts = db.shifts.filter((s) => !tolti.has(s));
       const rimasti = new Set(db.shifts.filter((s) => s.staff_id === staffId && s.date === data).map((s) => s.kind));
-      for (const v of voci) if (!rimasti.has(v.kind)) db.shifts.push({ id: nextId++, staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested });
+      for (const v of voci) if (!rimasti.has(v.kind)) db.shifts.push({ id: nextId++, staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null });
       salva();
+    },
+    async impostaOrario(staffId, data, kind, inizio, fine) {
+      const r = db.shifts.find((s) => s.staff_id === staffId && s.date === data && s.kind === kind);
+      if (!r) throw new Error('Turno non trovato.');
+      r.start_time = inizio; r.end_time = fine; salva();
     },
     // --- consenso dell'operatore per modificare caselle protette ---
     async elencaSblocchi() {
@@ -128,16 +134,17 @@ async function backendSupabase() {
       const { da, a } = intervallo(y, m);
       const [staff, shifts, events, mese] = await Promise.all([
         sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active').then(errore),
-        sb.from('shifts').select('id,staff_id,date,kind,requested').gte('date', da).lte('date', a).then(errore),
+        sb.from('shifts').select('id,staff_id,date,kind,requested,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('events').select('id,date,kind,label,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('months').select('year,month,status,notes').eq('year', y).eq('month', m).maybeSingle().then(errore),
       ]);
       return { staff, shifts, events, month: mese || { year: y, month: m, status: 'draft', notes: '' } };
     },
     async impostaCella(staffId, data, voci) {
-      const esistenti = errore(await sb.from('shifts').select('id,kind,requested').eq('staff_id', staffId).eq('date', data));
-      const nuovo = new Map(voci.map((v) => [v.kind, !!v.requested]));
-      const daTogliere = esistenti.filter((e) => !nuovo.has(e.kind) || nuovo.get(e.kind) !== !!e.requested);
+      const esistenti = errore(await sb.from('shifts').select('id,kind,requested,start_time,end_time').eq('staff_id', staffId).eq('date', data));
+      const firma = (v) => `${!!v.requested}|${(v.start_time || '').slice(0, 5)}|${(v.end_time || '').slice(0, 5)}`;
+      const nuovo = new Map(voci.map((v) => [v.kind, firma(v)]));
+      const daTogliere = esistenti.filter((e) => !nuovo.has(e.kind) || nuovo.get(e.kind) !== firma(e));
       if (daTogliere.length) {
         // se la casella è protetta e manca il consenso, il database rifiuta e restituisce l'errore
         errore(await sb.from('shifts').delete().in('id', daTogliere.map((e) => e.id)));
@@ -146,8 +153,11 @@ async function backendSupabase() {
       const rimasti = new Set(esistenti.filter((e) => !tolti.has(e.id)).map((e) => e.kind));
       const daAggiungere = voci.filter((v) => !rimasti.has(v.kind));
       if (daAggiungere.length) {
-        errore(await sb.from('shifts').insert(daAggiungere.map((v) => ({ staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested }))));
+        errore(await sb.from('shifts').insert(daAggiungere.map((v) => ({ staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null }))));
       }
+    },
+    async impostaOrario(staffId, data, kind, inizio, fine) {
+      errore(await sb.from('shifts').update({ start_time: inizio, end_time: fine }).eq('staff_id', staffId).eq('date', data).eq('kind', kind));
     },
     // --- consenso dell'operatore per modificare caselle protette ---
     async elencaSblocchi() {

@@ -1,9 +1,10 @@
+import { descriviCella, notteFinisceDa, scostamento } from './cella.js';
+
 // Disegna il foglio turni come tabella HTML (stesso schema del foglio cartaceo):
 // due righe per persona (M sopra, P sotto), giorni in orizzontale, ultima colonna = 1° del mese dopo.
 
 const LETTERE = ['D', 'L', 'M', 'M', 'G', 'V', 'S'];          // getDay(): 0 = domenica
 const MESI = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
-const FULL_DAY = ['PERM', 'F', 'FS', 'RR', 'R'];
 // Voci protette: la coordinatrice non può modificarle né cancellarle senza il consenso dell'operatore
 export const PROTETTI = ['F', 'FS', 'PERM', 'RR'];
 export const eProtetta = (e) => PROTETTI.includes(e.kind) || !!e.requested;              // occupano la cella su due righe
@@ -18,6 +19,15 @@ const ICONA_SPESA =
   '<g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M10 4.6v10.8M5.3 7.3l9.4 5.4M14.7 7.3l-9.4 5.4"/></g></svg>';
 
 const SUB_R = '<sub class="req">R</sub>';
+const parteHtml = (p) => ({
+  lett: `<span class="lett">${p.v}</span>`,
+  pedice: SUB_R,
+  spesa: ICONA_SPESA,
+  rb: '<span class="rb">RB</span>',
+  piccola: `<span class="lett piccola">${p.v}</span>`,
+  pillola: `<span class="pill">${esc(p.v)}</span>`,
+  delta: `<sup class="delta">${p.v}</sup>`,
+}[p.t]);
 
 export function giorniDelMese(y, m) { return new Date(y, m, 0).getDate(); }
 
@@ -29,13 +39,13 @@ function indicizza(shifts) {
   for (const s of shifts) {
     const k = `${s.staff_id}|${s.date}`;
     if (!map.has(k)) map.set(k, []);
-    map.get(k).push({ kind: s.kind, requested: !!s.requested });
+    map.get(k).push({ kind: s.kind, requested: !!s.requested, start_time: s.start_time || null, end_time: s.end_time || null });
   }
   return map;
 }
 
 // Righe di legenda in testa al foglio, ricavate dagli eventi del mese
-export function righeLegenda(events, y, m) {
+export function righeLegenda(events, y, m, shifts = []) {
   const out = [];
   const ora = (t) => (t ? t.slice(0, 5).replace(':', '.') : '');
   const gg = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
@@ -56,7 +66,17 @@ export function righeLegenda(events, y, m) {
     const t = `${gg(e.date)} ${e.label}`;
     out.push({ cls: 'altro', b: '', t, html: esc(t) });
   }
-  out.push({ cls: 'rbleg', b: 'RB', t: ' – recupero ore', html: '<b>RB</b> – recupero ore' });
+  // la spiegazione di RB compare solo se nel mese c'è almeno un recupero ore
+  if (shifts.some((s) => s.kind === 'RB' && s.date.startsWith(`${y}-${pad(m)}-`))) {
+    out.push({ cls: 'rbleg', b: 'RB', t: ' – recupero ore', html: '<b>RB</b> – recupero ore' });
+  }
+  const delMeseTurni = shifts.filter((s) => s.date.startsWith(`${y}-${pad(m)}-`));
+  if (delMeseTurni.some((s) => s.kind === 'MU')) {
+    out.push({ cls: 'mugleg', b: 'MU', t: ' – malattia (mutua)', html: '<b>MU</b> – malattia (mutua)' });
+  }
+  if (delMeseTurni.some((s) => scostamento(s))) {
+    out.push({ cls: 'deltaleg', b: '+4  /  −1', t: ' – ore in più o in meno rispetto al turno', html: '<b>+4 / −1</b> – ore in più o in meno rispetto al turno' });
+  }
   return out;
 }
 
@@ -116,40 +136,25 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       if (!p) { rM += cella('m', ''); rP += cella('p', ''); continue; }
 
       const kinds = get(p.id, c.data);
-      const has = (x) => kinds.find((e) => e.kind === x);
       // notte che finisce stamattina (iniziata il giorno prima)
-      const prev = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1));
-      const prevIso = prev.toISOString().slice(0, 10);
-      const notteFinisce = get(p.id, prevIso).some((e) => e.kind === 'N');
-      const notteInizia = has('N');
-      const full = FULL_DAY.map(has).find(Boolean);
+      const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
+      const notteFinisce = notteFinisceDa(get(p.id, prevIso));
+      const d = descriviCella(kinds, notteFinisce);
       const protCls = editable && kinds.some(eProtetta) ? ' prot' : '';
 
-      if (full && !notteFinisce && !notteInizia) {
-        const txt = {
-          F: '<span class="big">F</span>',
-          FS: '<span class="trattino">–</span>',
-          PERM: `<span class="big">P</span>${SUB_R}`,   // permesso: P grande con R a pedice (è sempre una richiesta)
-          R: '<span class="big">R</span>',
-          RR: `<span class="big">R</span>${SUB_R}`,
-        }[full.kind];
-        rM += cella('m', txt, `full k-${full.kind}${protCls}`, 2);
+      if (d.doppia) {
+        const g = d.grande;
+        let txt = g.ovale
+          ? `<span class="ovale${Math.max(g.ovale.alto.length, g.ovale.basso.length) > 2 ? ' lungo' : ''}"><b>${esc(g.ovale.alto)}</b><b>${esc(g.ovale.basso)}</b></span>`
+          : g.trattino ? '<span class="trattino">–</span>'
+          : g.mu ? '<span class="mu">MU</span>'
+          : `<span class="big">${g.testo}</span>${g.pedice ? SUB_R : ''}`;
+        txt += d.pillole.map((v) => `<span class="pill pill-basso">${esc(v)}</span>`).join('');
+        rM += cella('m', txt, `full k-${d.kind}${protCls}`, 2);
         continue; // la riga P non emette nulla: la cella è su due righe
       }
-
-      // riga alta (mattina)
-      let m = '';
-      if (has('M')) m += `<span class="lett">M</span>${has('M').requested ? SUB_R : ''}`;
-      if (has('SPESA')) m += ICONA_SPESA;
-      if (has('RB')) m += '<span class="rb">RB</span>';
-      rM += cella('m', m, (notteFinisce ? 'notte-fine' : '') + protCls);
-
-      // riga bassa (pomeriggio)
-      let pp = '';
-      if (has('P')) pp += `<span class="lett">P</span>${has('P').requested ? SUB_R : ''}`;
-      if (notteInizia && notteInizia.requested) pp += SUB_R;
-      if (full) pp += `<span class="lett piccola">${{ F: 'F', FS: '–', PERM: 'P', R: 'R', RR: 'R' }[full.kind]}</span>`;
-      rP += cella('p', pp, (notteInizia ? 'notte-inizia' : '') + protCls);
+      rM += cella('m', d.alta.map(parteHtml).join(''), (d.notteFinisce ? 'notte-fine' : '') + protCls);
+      rP += cella('p', d.bassa.map(parteHtml).join('') + (d.notteIniziaRichiesta ? SUB_R : '') + (d.notteIniziaDelta ? `<sup class="delta delta-notte">${d.notteIniziaDelta}</sup>` : ''), (d.notteInizia ? 'notte-inizia' : '') + protCls);
     }
     return rM + '</tr>' + rP + '</tr>';
   };

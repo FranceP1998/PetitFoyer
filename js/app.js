@@ -2,6 +2,8 @@ import { creaBackend } from './data.js';
 import { CONFIG } from './config.js';
 import { renderGrid, righeLegenda, nomeMese, pad, eProtetta } from './grid.js';
 import { creaPdf, nomeFilePdf } from './pdf.js';
+import { proponiCopertura } from './mutua.js';
+import { etichettaScostamento } from './cella.js';
 
 const $ = (id) => document.getElementById(id);
 const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
@@ -17,6 +19,9 @@ const VOCI = [
   { kind: 'FS', etichetta: '–', nota: 'Domenica dentro ferie o permessi' },
   { kind: 'PERM', etichetta: 'P<sub>R</sub>', nota: 'Permesso' },
   { kind: 'SPESA', etichetta: '⊛', nota: 'Copertura spesa' },
+  { kind: 'T1018', etichetta: '10·18', nota: 'Turno 10–18' },
+  { kind: 'COP', etichetta: '◯', nota: 'Copertura (orari liberi)' },
+  { kind: 'MU', etichetta: 'MU', nota: 'Malattia (mutua): tieni selezionato il suo turno' },
   { kind: 'RB', etichetta: 'RB', nota: 'Recupero ore' },
 ];
 
@@ -96,6 +101,7 @@ function disegna() {
   $('btn-modifica').textContent = stato.modifica ? 'Fine modifiche' : 'Modifica';
   $('btn-modifica').classList.toggle('attivo', stato.modifica);
 
+  document.body.classList.toggle('operatore', !isCoord());
   $('f-servizio').textContent = CONFIG.SERVIZIO;
   $('f-mese').textContent = `${nomeMese(stato.m).toUpperCase()} ${stato.y}`;
 
@@ -109,11 +115,11 @@ function disegna() {
   disegnaConsensi();
   if (nascosto) return;
 
-  $('legenda').innerHTML = righeLegenda(events, stato.y, stato.m).map((r) => `<li class="${r.cls}">${r.html}</li>`).join('');
+  $('legenda').innerHTML = righeLegenda(events, stato.y, stato.m, shifts).map((r) => `<li class="${r.cls}">${r.html}</li>`).join('');
   $('foglio').innerHTML = renderGrid({
     year: stato.y, month: stato.m, staff, shifts, events,
     editable: isCoord() && stato.modifica,
-    evidenzia: stato.utente.staffId,
+    evidenzia: isCoord() ? null : stato.utente.staffId,          // gli operatori vedono la propria riga riquadrata in blu
   });
   $('foglio').classList.toggle('modificabile', isCoord() && stato.modifica);
 
@@ -157,7 +163,7 @@ $('btn-pdf').onclick = async () => {
     const { month, staff, shifts, events } = stato.dati;
     if (!logoPdf) logoPdf = leggiLogo();
     const logo = await logoPdf;
-    const bytes = creaPdf({ year: stato.y, month: stato.m, staff, shifts, events, servizio: CONFIG.SERVIZIO, note: month.notes || '', logo });
+    const bytes = creaPdf({ year: stato.y, month: stato.m, staff, shifts, events, servizio: CONFIG.SERVIZIO, note: month.notes || '', logo, evidenzia: isCoord() ? null : stato.utente.staffId });
     const nome = nomeFilePdf(stato.y, stato.m);
     const file = new File([bytes], nome, { type: 'application/pdf' });
     const touch = window.matchMedia('(pointer: coarse)').matches;
@@ -241,7 +247,13 @@ function apriCella(staffId, data) {
     const fissa = bloccata && cellaCorrente.protetti.has(v.kind);
     return `<button type="button" class="chip${fissa ? ' bloccato' : ''}" data-kind="${v.kind}" ${fissa ? 'disabled' : ''} title="${v.nota}"><span class="chip-sim">${v.etichetta}</span><span class="chip-nota">${v.nota}${fissa ? ' 🔒' : ''}</span></button>`;
   }).join('');
-  const aggiorna = () => { for (const b of box.children) b.classList.toggle('on', cellaCorrente.scelti.has(b.dataset.kind)); };
+  const cop = esistenti.find((e) => e.kind === 'COP');
+  $('cop-da').value = cop?.start_time ? cop.start_time.slice(0, 5) : '';
+  $('cop-a').value = cop?.end_time ? cop.end_time.slice(0, 5) : '';
+  const aggiorna = () => {
+    for (const b of box.children) b.classList.toggle('on', cellaCorrente.scelti.has(b.dataset.kind));
+    $('cella-cop').hidden = !cellaCorrente.scelti.has('COP');
+  };
   box.onclick = (e) => {
     const b = e.target.closest('.chip'); if (!b || b.disabled) return;
     const k = b.dataset.kind;
@@ -275,13 +287,27 @@ $('form-cella').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const c = cellaCorrente;
   const rich = $('cella-richiesto').checked;
+  if (c.scelti.has('COP') && (!$('cop-da').value || !$('cop-a').value || $('cop-da').value === $('cop-a').value)) {
+    alert('Per la copertura indica l\'ora di inizio e quella di fine.'); return;
+  }
   const voci = [...c.scelti].map((kind) => {
     if (c.bloccata && c.protetti.has(kind)) {                      // voce protetta: resta identica
       return { kind, requested: !!c.esistenti.find((e) => e.kind === kind)?.requested };
     }
-    return { kind, requested: rich && 'MPN'.includes(kind) };
+    const v = { kind, requested: rich && 'MPN'.includes(kind) };
+    const ex = c.esistenti.find((e) => e.kind === kind);
+    if (ex && ['M', 'P', 'N'].includes(kind)) { v.start_time = ex.start_time || null; v.end_time = ex.end_time || null; }   // gli orari modificati restano
+    if (kind === 'T1018') { v.start_time = '10:00'; v.end_time = '18:00'; }
+    if (kind === 'COP') { v.start_time = $('cop-da').value; v.end_time = $('cop-a').value; }
+    return v;
   });
-  await salvaCella(voci);
+  const turniScelti = ['M', 'P', 'N'].filter((k) => c.scelti.has(k));
+  if (c.scelti.has('MU') && turniScelti.length !== 1) {
+    alert('Per la malattia lascia selezionato il turno che avrebbe dovuto fare (M, P oppure N).'); return;
+  }
+  const nuovaMalattia = c.scelti.has('MU') && !c.esistenti.some((e) => e.kind === 'MU');
+  const ok = await salvaCella(voci);
+  if (ok && nuovaMalattia) apriCopertura(c.staffId, c.data, turniScelti[0]);
 });
 async function salvaCella(voci) {
   const c = cellaCorrente;
@@ -290,8 +316,36 @@ async function salvaCella(voci) {
     if (c.sblocco) await stato.be.chiudiSblocco(c.staffId, c.data, 'used');
     $('dlg-cella').close();
     await carica();
-  } catch (e) { alert('Non sono riuscito a salvare: ' + e.message); }
+    return true;
+  } catch (e) { alert('Non sono riuscito a salvare: ' + e.message); return false; }
 }
+
+// ------------------------------------------------------------ copertura di una malattia
+let copertura = null;
+function apriCopertura(staffId, data, turno) {
+  const malato = nomePersona(staffId);
+  const prop = proponiCopertura({ shifts: stato.dati.shifts, staff: stato.dati.staff, staffId, date: data, turno });
+  const voci = [];
+  if (prop.prima) voci.push({ ...prop.prima, ruolo: 'turno prima', verbo: `resta fino alle ${prop.prima.fine}` });
+  if (prop.dopo) voci.push({ ...prop.dopo, ruolo: 'turno dopo', verbo: `entra alle ${prop.dopo.inizio}` });
+  copertura = voci;
+  $('cop-testo').textContent = `${malato} in malattia, ${dataEstesa(data)} (turno ${turno}). Per coprire le 8 ore, ${prop.ore} ore a testa a chi sta prima e a chi sta dopo.`;
+  $('cop-righe').innerHTML = voci.length
+    ? voci.map((v, i) => `<label><input type="checkbox" data-i="${i}" checked><span><b>${v.nome}</b> (${v.ruolo}, ${dataEstesa(v.date)}): ${v.verbo} · ${v.inizio}–${v.fine} · <b>${etichettaScostamento(prop.ore)}</b> ore</span></label>`).join('')
+    : '<p>Non trovo nessuno nel turno prima o dopo: la copertura va organizzata a mano.</p>';
+  $('cop-si').hidden = !voci.length;
+  $('cop-no').textContent = voci.length ? 'Non ora' : 'Chiudi';
+  $('dlg-copertura').showModal();
+}
+$('cop-no').onclick = () => $('dlg-copertura').close();
+$('cop-si').onclick = async () => {
+  const scelte = [...$('cop-righe').querySelectorAll('input:checked')].map((i) => copertura[+i.dataset.i]);
+  try {
+    for (const v of scelte) await stato.be.impostaOrario(v.staffId, v.date, v.kind, v.inizio, v.fine);
+  } catch (e) { alert('Non sono riuscito ad applicare: ' + e.message); return; }
+  $('dlg-copertura').close();
+  await carica();
+};
 
 // ------------------------------------------------------------ eventi del mese
 $('btn-eventi').onclick = () => { elencaEventi(); $('ev-date').value = `${stato.y}-${pad(stato.m)}-01`; $('dlg-eventi').showModal(); };

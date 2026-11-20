@@ -207,13 +207,17 @@ export const DEMO = {
    "staff_id": 2,
    "date": "2026-11-06",
    "kind": "M",
-   "requested": false
+   "requested": false,
+   "start_time": "07:00",
+   "end_time": "14:00"
   },
   {
    "staff_id": 3,
    "date": "2026-11-06",
    "kind": "P",
-   "requested": false
+   "requested": false,
+   "start_time": "14:00",
+   "end_time": "23:00"
   },
   {
    "staff_id": 5,
@@ -393,13 +397,17 @@ export const DEMO = {
    "staff_id": 3,
    "date": "2026-11-12",
    "kind": "N",
-   "requested": false
+   "requested": false,
+   "start_time": "19:00",
+   "end_time": "07:00"
   },
   {
    "staff_id": 4,
    "date": "2026-11-12",
    "kind": "M",
-   "requested": false
+   "requested": false,
+   "start_time": "07:00",
+   "end_time": "19:00"
   },
   {
    "staff_id": 7,
@@ -981,6 +989,44 @@ export const DEMO = {
    "staff_id": 6,
    "date": "2026-12-01",
    "kind": "M",
+   "requested": false
+  },
+  {
+   "staff_id": 2,
+   "date": "2026-11-07",
+   "kind": "T1018",
+   "requested": false,
+   "start_time": "10:00",
+   "end_time": "18:00"
+  },
+  {
+   "staff_id": 3,
+   "date": "2026-11-09",
+   "kind": "COP",
+   "requested": false,
+   "start_time": "09:30",
+   "end_time": "13:00"
+  },
+  {
+   "staff_id": 1,
+   "date": "2026-11-09",
+   "kind": "COP",
+   "requested": false,
+   "start_time": "09:00",
+   "end_time": "13:00"
+  },
+  {
+   "staff_id": 5,
+   "date": "2026-11-12",
+   "kind": "COP",
+   "requested": false,
+   "start_time": "16:00",
+   "end_time": "20:00"
+  },
+  {
+   "staff_id": 2,
+   "date": "2026-11-12",
+   "kind": "MU",
    "requested": false
   }
  ],

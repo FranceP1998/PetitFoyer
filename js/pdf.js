@@ -4,6 +4,7 @@
 // striscia bianca tra un operatore e l'altro, sbarra della notte, domeniche gialle, ecc.
 
 import { giorniDelMese, meseDopo, nomeMese, pad, iso, righeLegenda } from './grid.js';
+import { descriviCella, notteFinisceDa } from './cella.js';
 import { LARGHEZZE } from './pdf-metrics.js';
 
 const MM = 72 / 25.4;               // punti PDF per millimetro
@@ -16,15 +17,14 @@ const K_NOME = 4.3;                 // larghezza colonna nomi, in "caselle"
 const K_GAP = 0.25;                 // striscia bianca tra operatori, in "caselle"
 const K_HEAD = 0.8;                 // altezza di ogni riga d'intestazione (L M M G… e 1 2 3…), in "caselle"
 
-const COLORI = { giallo: '#fff2a8', arancio: '#ffd9a0', azzurro: '#c9ebf7', nero: '#111111', grigio: '#9a9a9a' };
+const COLORI = { giallo: '#fff2a8', arancio: '#ffd9a0', azzurro: '#c9ebf7', nero: '#111111', grigio: '#9a9a9a', blu: '#1a5fd0' };
 const SOTTILE = 0.22, FORTE = 0.6;  // spessore delle linee (mm)
 const LETTERE = ['D', 'L', 'M', 'M', 'G', 'V', 'S'];
-const FULL_DAY = ['PERM', 'F', 'FS', 'RR', 'R'];
 
 // ----------------------------------------------------------------- testo e font
 const FONT = { H: '/F1', B: '/F2', I: '/F3', T: '/F4' };                 // Helvetica, Bold, Oblique, Times-Italic
 const METRICA = { H: LARGHEZZE.H, B: LARGHEZZE.B, I: LARGHEZZE.H, T: LARGHEZZE.T };
-const WIN = { '€': 0x80, '…': 0x85, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97 };
+const WIN = { '−': 0x96, '€': 0x80, '…': 0x85, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97 };
 
 function byteDi(ch) {
   if (WIN[ch]) return WIN[ch];
@@ -60,6 +60,14 @@ class Pagina {
       `${X(cx - k)} ${Y(cy - r)} ${X(cx - r)} ${Y(cy - k)} ${X(cx - r)} ${Y(cy)} c ` +
       `${X(cx - r)} ${Y(cy + k)} ${X(cx - k)} ${Y(cy + r)} ${X(cx)} ${Y(cy + r)} c ` +
       `${X(cx + k)} ${Y(cy + r)} ${X(cx + r)} ${Y(cy + k)} ${X(cx + r)} ${Y(cy)} c S`);
+  }
+  ellisse(cx, cy, rx, ry, sp) {
+    const kx = 0.5523 * rx, ky = 0.5523 * ry, X = (v) => this.X(v), Y = (v) => this.Y(v);
+    this.c.push(`${rgb(COLORI.nero)} RG ${num(sp * MM)} w [] 0 d ${X(cx + rx)} ${Y(cy)} m ` +
+      `${X(cx + rx)} ${Y(cy - ky)} ${X(cx + kx)} ${Y(cy - ry)} ${X(cx)} ${Y(cy - ry)} c ` +
+      `${X(cx - kx)} ${Y(cy - ry)} ${X(cx - rx)} ${Y(cy - ky)} ${X(cx - rx)} ${Y(cy)} c ` +
+      `${X(cx - rx)} ${Y(cy + ky)} ${X(cx - kx)} ${Y(cy + ry)} ${X(cx)} ${Y(cy + ry)} c ` +
+      `${X(cx + kx)} ${Y(cy + ry)} ${X(cx + rx)} ${Y(cy + ky)} ${X(cx + rx)} ${Y(cy)} c S`);
   }
   // testo con la linea di base a y (mm). align: 'l' | 'c' | 'r' rispetto a x
   immagine(x, y, w, h) { this.c.push(`q ${num(w * MM)} 0 0 ${num(h * MM)} ${this.X(x)} ${this.Y(y + h)} cm /Im1 Do Q`); }
@@ -109,7 +117,7 @@ export function nomeFilePdf(year, month) { return `Turni-${nomeMese(month)}-${ye
 
 // opzioni: { year, month, staff, shifts, events, servizio, note }
 // logo (facoltativo): { w, h, rgb } con i pixel RGB già composti su fondo bianco
-export function creaPdf({ year, month, staff, shifts, events, servizio = '', note = '', logo = null }) {
+export function creaPdf({ year, month, staff, shifts, events, servizio = '', note = '', logo = null, evidenzia = null }) {
   const nGiorni = giorniDelMese(year, month);
   const next = meseDopo(year, month);
   const persone = [...staff].filter((p) => p.active !== false).sort((a, b) => a.sort_order - b.sort_order);
@@ -120,7 +128,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   for (const s of shifts) {
     const k = `${s.staff_id}|${s.date}`;
     if (!idx.has(k)) idx.set(k, []);
-    idx.get(k).push({ kind: s.kind, requested: !!s.requested });
+    idx.get(k).push({ kind: s.kind, requested: !!s.requested, start_time: s.start_time || null, end_time: s.end_time || null });
   }
   const get = (sid, data) => idx.get(`${sid}|${data}`) || [];
 
@@ -136,7 +144,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   }
 
   // ---- testi sopra e sotto la tabella (altezze fisse, in mm)
-  const legenda = righeLegenda(events, year, month);
+  const legenda = righeLegenda(events, year, month, shifts);
   const H_MARCHIO = 12, H_SERVIZIO = 12, H_RIGA_LEG = 5.4, H_OSS_RIGA = 5.6;
   const PT_OSS = 9.5;
 
@@ -200,7 +208,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   for (const r of legenda) {
     const PT = 9;
     const yb = y + 3.9;
-    const bg = r.cls === 'collettivo' ? COLORI.azzurro : r.cls === 'spesa' ? COLORI.giallo : null;
+    const bg = r.cls === 'collettivo' ? COLORI.azzurro : r.cls === 'spesa' ? COLORI.arancio : null;   // stessi colori delle intestazioni dei giorni
     const wIcona = r.icona ? 5.2 : 0;
     const w = wIcona + lMM(r.b, 'B', PT) + lMM(r.t, 'H', PT) + 3;
     if (bg) pg.fill(xL + 1, y + 0.3, w, H_RIGA_LEG - 0.8, bg);
@@ -244,49 +252,44 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
     pg.testo(p.name.toUpperCase(), xL + 1.6, yM + s + 0.36 * (0.42 * s * MM) / MM, 'B', 0.42 * s * MM);
     cols.forEach((c, j) => {
       const kinds = get(p.id, c.data);
-      const has = (x) => kinds.find((e) => e.kind === x);
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
-      const notteFinisce = get(p.id, prevIso).some((e) => e.kind === 'N');
-      const notteInizia = has('N');
-      const full = FULL_DAY.map(has).find(Boolean);
+      const notteFinisce = notteFinisceDa(get(p.id, prevIso));
+      const d = descriviCella(kinds, notteFinisce);
       const x0 = xs(j), cx = x0 + s / 2;
 
-      if (full && !notteFinisce && !notteInizia) {
+      if (d.doppia) {
         merged.add(`${i}|${j}`);
         const cy = yM + s;                                     // centro della casella doppia
-        if (full.kind === 'F') pg.testoCentro('F', cx, cy, 'H', ptBig);
-        else if (full.kind === 'R') pg.testoCentro('R', cx, cy, 'H', ptBig);
-        else if (full.kind === 'RR' || full.kind === 'PERM') {      // lettera grande + R maiuscola piccola a pedice
-          const L = full.kind === 'RR' ? 'R' : 'P';
-          const wR = lMM(L, 'H', ptBig), wS = lMM('R', 'B', ptSub);
+        const g = d.grande;
+        if (g.ovale) {                                         // 10-18 o copertura: due orari dentro un ovale
+          pg.ellisse(cx, cy, 0.43 * s, 0.9 * s, 0.4);
+          const lungo = Math.max(g.ovale.alto.length, g.ovale.basso.length);
+          const pt = (lungo <= 2 ? 0.40 : lungo <= 4 ? 0.31 : 0.26) * s * MM;
+          pg.testoCentro(g.ovale.alto, cx, cy - 0.46 * s, 'B', pt);
+          pg.testoCentro(g.ovale.basso, cx, cy + 0.46 * s, 'B', pt);
+        } else if (g.trattino) pg.linea(cx - 0.17 * s, cy, cx + 0.17 * s, cy, 0.5);
+        else if (g.pedice) {                                   // lettera grande + R maiuscola piccola a pedice
+          const wR = lMM(g.testo, 'H', ptBig), wS = lMM('R', 'B', ptSub);
           const xa = cx - (wR + 0.2 + wS) / 2;
-          pg.testo(L, xa, cy + 0.36 * ptBig / MM, 'H', ptBig);
+          pg.testo(g.testo, xa, cy + 0.36 * ptBig / MM, 'H', ptBig);
           pg.testo('R', xa + wR + 0.2, cy + 0.36 * ptBig / MM + 0.1 * s, 'B', ptSub);
-        } else if (full.kind === 'FS') pg.linea(cx - 0.17 * s, cy, cx + 0.17 * s, cy, 0.5);
+        } else if (g.mu) pg.testoCentro('MU', cx, cy, 'H', 0.5 * s * MM);
+        else pg.testoCentro(g.testo, cx, cy, 'H', ptBig);
+        d.pillole.forEach((v) => disegnaPillola(pg, v, cx, yM + 2 * s - 0.3 * s, s));
         return;
       }
 
-      // riga alta (mattina): M, eventuale R piccola, copertura spesa, RB
-      const cyM = yM + s / 2;
-      const parti = [];
-      if (has('M')) { parti.push({ t: 'M', f: 'B', pt: ptLett }); if (has('M').requested) parti.push({ t: 'R', f: 'B', pt: ptSub, giu: true }); }
-      if (has('SPESA')) parti.push({ icona: true, d: 0.575 * s });
-      if (has('RB')) parti.push({ t: 'RB', f: 'B', pt: 0.33 * s * MM });
-      disegnaGruppo(pg, parti, cx, cyM, s);
-
-      // riga bassa (pomeriggio)
-      const cyP = yP + s / 2;
-      const bassa = [];
-      if (has('P')) { bassa.push({ t: 'P', f: 'B', pt: ptLett }); if (has('P').requested) bassa.push({ t: 'R', f: 'B', pt: ptSub, giu: true }); }
-      if (full) bassa.push({ t: { F: 'F', FS: '–', PERM: 'P', R: 'R', RR: 'R' }[full.kind], f: 'H', pt: ptLett });
-      disegnaGruppo(pg, bassa, cx, cyP, s);
-      if (notteInizia && notteInizia.requested) {
+      // riga alta (mattina) e riga bassa (pomeriggio)
+      disegnaGruppo(pg, d.alta.map((q) => parteDi(q, s, ptLett, ptSub)), cx, yM + s / 2, s);
+      disegnaGruppo(pg, d.bassa.map((q) => parteDi(q, s, ptLett, ptSub)), cx, yP + s / 2, s);
+      if (d.notteIniziaDelta) pg.testo(d.notteIniziaDelta, x0 + 0.1 * s, yP + 0.36 * s, 'B', ptSub);
+      if (d.notteIniziaRichiesta) {
         pg.testo('R', x0 + s - 0.12 * s - lMM('R', 'B', ptSub), yP + s - 0.14 * s, 'B', ptSub);
       }
 
       // sbarra della notte: da in basso a sinistra (pomeriggio del giorno N) a in alto a destra (mattina di N+1)
-      if (notteInizia) pg.linea(x0, yP + s, x0 + s, yP, 0.38);
-      if (notteFinisce) pg.linea(x0, yM + s, x0 + s, yM, 0.38);
+      if (d.notteInizia) pg.linea(x0, yP + s, x0 + s, yP, 0.38);
+      if (d.notteFinisce) pg.linea(x0, yM + s, x0 + s, yM, 0.38);
     });
   });
 
@@ -304,14 +307,17 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   }
 
   // 5. linee marcate: sopra e sotto ogni operatore, bordo sinistro dei nomi, fine settimana e fine mese
+  const miaRiga = (i) => evidenzia != null && persone[i].id === evidenzia;     // la riga di chi scarica il PDF è riquadrata in blu
   for (let i = 0; i < n; i++) {
     const yM = topBlocchi[i];
-    pg.linea(xL, yM, xR, yM, FORTE, { cap: 2 });
-    pg.linea(xL, yM + 2 * s, xR, yM + 2 * s, FORTE, { cap: 2 });
-    pg.linea(xL, yM, xL, yM + 2 * s, FORTE, { cap: 2 });
+    const o = { cap: 2, hex: miaRiga(i) ? COLORI.blu : COLORI.nero };
+    pg.linea(xL, yM, xR, yM, FORTE, o);
+    pg.linea(xL, yM + 2 * s, xR, yM + 2 * s, FORTE, o);
+    pg.linea(xL, yM, xL, yM + 2 * s, FORTE, o);
   }
   cols.forEach((c, j) => { if (c.wk) pg.linea(xs(j + 1), yT0, xs(j + 1), yFine, FORTE, { cap: 2 }); });   // dopo ogni domenica e dopo l'ultima colonna
   pg.linea(xs(nCol - 1), yT0, xs(nCol - 1), yFine, FORTE, { cap: 2 });                                      // prima della colonna del 1° mese dopo
+  for (let i = 0; i < n; i++) if (miaRiga(i)) pg.linea(xR, topBlocchi[i], xR, topBlocchi[i] + 2 * s, FORTE, { cap: 2, hex: COLORI.blu });
 
   // ---------------------------------------------------------------- osservazioni
   let yO = yFine + 5;
@@ -341,15 +347,36 @@ function disegnaIcona(pg, cx, cy, d) {
 // disegna in fila (centrata nella casella) lettere, R piccole a pedice e icone
 function disegnaGruppo(pg, parti, cx, cy, s) {
   if (!parti.length) return;
-  const lung = (p) => (p.icona ? p.d : lMM(p.t, p.f, p.pt));
+  const lung = (p) => (p.icona ? p.d : p.pillola ? Math.min(lMM(p.pillola, 'B', (p.pillola.length <= 5 ? 0.30 : 0.25) * s * MM) + 1.4, s - 0.3) : lMM(p.t, p.f, p.pt));
   const spazio = 0.03 * s;
   const tot = parti.reduce((a, p) => a + lung(p), 0) + spazio * (parti.length - 1);
-  const rif = parti.find((p) => !p.icona && !p.giu);          // corpo di riferimento per la linea di base
+  const rif = parti.find((p) => !p.icona && !p.pillola && !p.giu);          // corpo di riferimento per la linea di base
   let x = cx - tot / 2;
   for (const p of parti) {
     if (p.icona) disegnaIcona(pg, x + p.d / 2, cy, p.d);
+    else if (p.pillola) disegnaPillola(pg, p.pillola, x + lung(p) / 2, cy, s);
     else if (p.giu) pg.testo(p.t, x, cy + 0.36 * (rif ? rif.pt : p.pt) / MM + 0.1 * s, p.f, p.pt);   // R piccola in basso
+    else if (p.su) pg.testo(p.t, x, cy + 0.36 * (rif ? rif.pt : p.pt) / MM - 0.2 * s, p.f, p.pt);    // ore in più/meno in alto
     else pg.testo(p.t, x, cy + 0.36 * p.pt / MM, p.f, p.pt);
     x += lung(p) + spazio;
   }
+}
+
+// traduce una parte della descrizione (cella.js) in un pezzo da disegnare in fila
+function parteDi(q, s, ptLett, ptSub) {
+  if (q.t === 'lett') return { t: q.v, f: 'B', pt: ptLett };
+  if (q.t === 'pedice') return { t: 'R', f: 'B', pt: ptSub, giu: true };
+  if (q.t === 'spesa') return { icona: true, d: 0.575 * s };
+  if (q.t === 'rb') return { t: 'RB', f: 'B', pt: 0.33 * s * MM };
+  if (q.t === 'piccola') return { t: q.v, f: 'H', pt: ptLett };
+  if (q.t === 'delta') return { t: q.v, f: 'B', pt: ptSub, su: true };
+  return { pillola: q.v, s };                                    // orari cerchiati in forma compatta
+}
+
+// orari cerchiati in forma compatta (una riga): "9–13"
+function disegnaPillola(pg, testo, cx, cy, s) {
+  const pt = (testo.length <= 5 ? 0.30 : 0.25) * s * MM;
+  const w = lMM(testo, 'B', pt);
+  pg.ellisse(cx, cy, Math.min(w / 2 + 0.7, s / 2 - 0.15), 0.27 * s, 0.3);
+  pg.testoCentro(testo, cx, cy, 'B', pt);
 }

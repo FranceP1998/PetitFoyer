@@ -46,18 +46,35 @@ create table if not exists public.months (
 --    PERM       = permesso (giorno intero)
 --    SPESA      = copertura spesa (10-12, 2 ore)
 --    RB         = recupero ore
+--    T1018      = turno 10-18 (occupa il giorno, rispetta tutte le regole come gli altri turni)
+--    MU         = malattia (mutua): il turno M/P/N della persona resta registrato sotto, non si disegna
+--    COP        = copertura con orari scelti dalla coordinatrice (start_time/end_time): non occupa
+--                 il giorno e non richiede le 11 ore di stacco
 --    requested  = vero se il turno (M, P, N) è stato richiesto dall'operatore
+--    start_time / end_time = orari effettivi, quando diversi dallo standard (copertura, e in futuro
+--                 gli allungamenti concordati tra colleghi o le coperture per malattia)
 -- ---------------------------------------------------------------------
 create table if not exists public.shifts (
   id          bigint generated always as identity primary key,
   staff_id    bigint not null references public.staff(id) on delete cascade,
   date        date   not null,
-  kind        text   not null check (kind in ('M','P','N','R','RR','F','FS','PERM','SPESA','RB')),
+  kind        text   not null,
   requested   boolean not null default false,
+  start_time  time,
+  end_time    time,
   inserted_at timestamptz not null default now(),   -- serve per la precedenza (chi ha chiesto prima)
   inserted_by uuid default auth.uid(),
   unique (staff_id, date, kind)
 );
+-- (le righe seguenti rendono il file rieseguibile anche su un database già creato con la versione precedente)
+alter table public.shifts add column if not exists start_time time;
+alter table public.shifts add column if not exists end_time   time;
+alter table public.shifts drop constraint if exists shifts_kind_check;
+alter table public.shifts add constraint shifts_kind_check
+  check (kind in ('M','P','N','R','RR','F','FS','PERM','SPESA','RB','T1018','COP','MU'));
+alter table public.shifts drop constraint if exists shifts_cop_orari;
+alter table public.shifts add constraint shifts_cop_orari
+  check (kind <> 'COP' or (start_time is not null and end_time is not null and start_time <> end_time));
 create index if not exists shifts_date_idx on public.shifts (date);
 
 -- ---------------------------------------------------------------------
@@ -261,6 +278,11 @@ set search_path = public
 as $$
 begin
   if public.is_protected_row(old.kind, old.requested) then
+    -- se cambiano solo gli orari di un turno M/P/N (es. copertura di una malattia) non serve il consenso
+    if tg_op = 'UPDATE' and old.kind in ('M','P','N') and new.kind = old.kind
+       and new.requested = old.requested and new.staff_id = old.staff_id and new.date = old.date then
+      return new;
+    end if;
     if not exists (
       select 1 from public.unlocks u
        where u.staff_id = old.staff_id
