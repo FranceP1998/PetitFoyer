@@ -24,7 +24,6 @@ jobs:
           code=$(curl -sS -o /tmp/risposta.txt -w '%{http_code}' -X POST \
             "$SUPABASE_URL/rest/v1/rpc/ping" \
             -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "Content-Type: application/json" -d '{}')
           echo "Risposta HTTP $code"; cat /tmp/risposta.txt; echo
           test "$code" = "200"
