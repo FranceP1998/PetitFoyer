@@ -4,7 +4,7 @@
 // striscia bianca tra un operatore e l'altro, sbarra della notte, domeniche gialle, ecc.
 
 import { giorniDelMese, meseDopo, nomeMese, pad, iso, righeLegenda } from './grid.js';
-import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, inServizio } from './cella.js';
+import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, notteRichiestaDa, inServizio } from './cella.js';
 import { LARGHEZZE } from './pdf-metrics.js';
 
 const MM = 72 / 25.4;               // punti PDF per millimetro
@@ -254,7 +254,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
       const kinds = get(p.id, c.data);
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
-      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)));
+      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)), notteRichiestaDa(get(p.id, prevIso)));
       const x0 = xs(j), cx = x0 + s / 2;
 
       if (d.doppia) {
@@ -290,8 +290,8 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
       };
       lati(d.latiAlta, yM, d.notteFinisce);
       lati(d.latiBassa, yP, d.notteInizia);
-      if (d.notteIniziaRichiesta) {
-        pg.testo('R', x0 + 0.1 * s, yP + 0.58 * s, 'B', ptSub);     // alto a sinistra, sopra la sbarra
+      if (d.notteFinisceRichiesta) {                                                // notte richiesta: R a destra della sbarra, nella casella dove la notte finisce
+        pg.testo('R', x0 + s - 0.12 * s - lMM('R', 'B', ptSub), yM + s - 0.14 * s, 'B', ptSub);
       }
 
       // sbarra della notte: da in basso a sinistra (pomeriggio del giorno N) a in alto a destra (mattina di N+1)

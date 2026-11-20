@@ -119,7 +119,7 @@ svg.spesa { width: 17px; height: 17px; vertical-align: middle; }
 /* sbarra della notte: dal pomeriggio del giorno N (in basso a sinistra) alla mattina di N+1 (in alto a destra) */
 #foglio { position: relative; }
 svg.notti { position: absolute; left: 0; top: 0; pointer-events: none; color: #111; z-index: 1; }
-td.notte-inizia sub.req { position: absolute; left: calc(var(--s) * .1); top: calc(var(--s) * .36); right: auto; bottom: auto; margin: 0; }   /* in alto a sinistra: sopra la sbarra, lontano dalla casella dove la notte finisce */
+td.notte-fine sub.req.fine-notte { position: absolute; right: 3px; bottom: 2px; margin: 0; }   /* notte richiesta: la R sta a destra della sbarra, nella casella dove la notte finisce */
 
 /* modifica */
 .modificabile td[data-staff] { cursor: pointer; }

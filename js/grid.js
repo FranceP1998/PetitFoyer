@@ -1,4 +1,4 @@
-import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, scostamento, inServizio } from './cella.js';
+import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, notteRichiestaDa, scostamento, inServizio } from './cella.js';
 
 // Disegna il foglio turni come tabella HTML (stesso schema del foglio cartaceo):
 // due righe per persona (M sopra, P sotto), giorni in orizzontale, ultima colonna = 1° del mese dopo.
@@ -19,6 +19,7 @@ const ICONA_SPESA =
   '<g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M10 4.6v10.8M5.3 7.3l9.4 5.4M14.7 7.3l-9.4 5.4"/></g></svg>';
 
 const SUB_R = '<sub class="req">R</sub>';
+const SUB_R_FINE = '<sub class="req fine-notte">R</sub>';     // notte richiesta: nella casella dove la notte finisce
 const parteHtml = (p) => ({
   lett: `<span class="lett">${p.v}</span>`,
   pedice: SUB_R,
@@ -140,7 +141,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       // notte che finisce stamattina (iniziata il giorno prima)
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
-      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)));
+      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)), notteRichiestaDa(get(p.id, prevIso)));
       const protCls = editable && kinds.some((e) => eProtetta(e) && !e.pending) ? ' prot' : '';
       const attCls = kinds.some((e) => e.pending) ? (kinds.some((e) => e.pending && e.critica) ? ' in-attesa critica' : ' in-attesa') : '';
 
@@ -157,8 +158,8 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       }
       // ore in più/meno agli estremi del turno: a sinistra se si entra prima/dopo, a destra se si esce dopo/prima
       const lati = (l) => (l.s ? `<span class="dl">${l.s}</span>` : '') + (l.e ? `<span class="dr">${l.e}</span>` : '');
-      rM += cella('m', d.alta.map(parteHtml).join('') + lati(d.latiAlta), (d.notteFinisce ? 'notte-fine' : '') + protCls + attCls);
-      rP += cella('p', d.bassa.map(parteHtml).join('') + (d.notteIniziaRichiesta ? SUB_R : '') + lati(d.latiBassa), (d.notteInizia ? 'notte-inizia' : '') + protCls + attCls);
+      rM += cella('m', d.alta.map(parteHtml).join('') + (d.notteFinisceRichiesta ? SUB_R_FINE : '') + lati(d.latiAlta), (d.notteFinisce ? 'notte-fine' : '') + protCls + attCls);
+      rP += cella('p', d.bassa.map(parteHtml).join('') + lati(d.latiBassa), (d.notteInizia ? 'notte-inizia' : '') + protCls + attCls);
     }
     return rM + '</tr>' + rP + '</tr>';
   };

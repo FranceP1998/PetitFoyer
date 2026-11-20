@@ -4,7 +4,7 @@
 // Ingresso: kinds = [{kind, requested, start_time, end_time}] di quel giorno, e se la notte
 // del giorno prima finisce stamattina. Uscita:
 //   { doppia: true,  grande, pillole }        casella unica su due righe (ferie, riposo, 10-18...)
-//   { doppia: false, alta, bassa, notteInizia, notteIniziaRichiesta, notteFinisce }
+//   { doppia: false, alta, bassa, notteInizia, notteFinisceRichiesta, notteFinisce }
 
 export const FULL_DAY = ['MU', 'PERM', 'F', 'FS', 'RR', 'R'];       // occupano tutto il giorno (MU = malattia)
 
@@ -38,6 +38,9 @@ export const etichettaScostamento = (h) => `${h > 0 ? '+' : '−'}${String(Math.
 // questa notte (iniziata il giorno prima) finisce stamattina? (non se chi la faceva è in malattia)
 export const notteFinisceDa = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N') && !kindsIeri.some((e) => e.kind === 'MU');
 
+// la notte che finisce stamattina era una notte richiesta? (la R a pedice va nella casella dove la notte finisce)
+export const notteRichiestaDa = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N' && e.requested) && !kindsIeri.some((e) => e.kind === 'MU');
+
 // la notte iniziata ieri era una notte saltata per malattia? (stamattina compare "MU" col pedice della notte)
 export const muDaIeri = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N') && kindsIeri.some((e) => e.kind === 'MU');
 
@@ -65,7 +68,7 @@ export function durataOre(inizio, fine) {
   return d / 60;
 }
 
-export function descriviCella(kinds, notteFinisce, muFine = false, fineDelta = '') {
+export function descriviCella(kinds, notteFinisce, muFine = false, fineDelta = '', notteFinisceRichiesta = false) {
   // in malattia il turno resta registrato ma non si disegna: al suo posto c'è "MU" con a pedice
   // il turno saltato (M, P oppure / per la notte), solo nello spazio che quel turno occupava
   let muTurno = null, muLibero = false;
@@ -135,7 +138,7 @@ export function descriviCella(kinds, notteFinisce, muFine = false, fineDelta = '
 
   return {
     doppia: false, alta, bassa,
-    notteInizia: !!notteInizia, notteIniziaRichiesta: !!(notteInizia && notteInizia.requested),
+    notteInizia: !!notteInizia, notteFinisceRichiesta: !!(notteFinisce && notteFinisceRichiesta),
     latiAlta, latiBassa,
     notteFinisce: !!notteFinisce,
   };
