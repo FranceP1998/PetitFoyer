@@ -17,8 +17,12 @@ create table if not exists public.staff (
   active         boolean not null default true,
   fixed_pattern  boolean not null default false,    -- true per Andrea (turni fissi)
   contract_hours numeric,                           -- ore di contratto mensili (le inserisce la coordinatrice)
+  start_date     date,                              -- primo giorno in servizio (vuoto = da sempre)
+  end_date       date,                              -- ultimo giorno in servizio (vuoto = ancora in servizio)
   created_at     timestamptz not null default now()
 );
+alter table public.staff add column if not exists start_date date;
+alter table public.staff add column if not exists end_date   date;
 
 -- ---------------------------------------------------------------------
 -- 2. Mesi (bozza / pubblicato) e osservazioni
@@ -105,15 +109,19 @@ begin
   update public.staff
      set user_id = new.id
    where lower(email) = lower(new.email)
-     and user_id is null;
+     and user_id is null
+     and active;
   return new;
 end;
 $$;
 
+-- Il collegamento avviene solo quando l'email risulta CONFERMATA (cioè quando chi ha
+-- l'accesso alla casella ha inserito il codice ricevuto): nessuno può "prenotare" il posto di un altro.
 drop trigger if exists on_auth_user_created_link_staff on auth.users;
 create trigger on_auth_user_created_link_staff
-  after insert on auth.users
-  for each row execute function public.link_staff_on_signup();
+  after insert or update of email_confirmed_at on auth.users
+  for each row when (new.email_confirmed_at is not null)
+  execute function public.link_staff_on_signup();
 
 -- ---------------------------------------------------------------------
 -- 7. Funzioni di appoggio per le regole di accesso
@@ -363,4 +371,104 @@ create policy unlocks_select on public.unlocks
 --     le leggerà tramite una funzione dedicata.
 -- ---------------------------------------------------------------------
 revoke select on public.staff from anon, authenticated;
-grant select (id, name, role, sort_order, active, fixed_pattern, user_id) on public.staff to authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date) on public.staff to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 11. Registrazione consentita SOLO alle email scritte nella tabella staff
+--     Il "primo accesso" dell'app crea l'account (codice ricevuto per email, poi scelta della
+--     password): il database rifiuta qualsiasi email che Marie non abbia inserito in "Gestione personale".
+-- ---------------------------------------------------------------------
+create or replace function public.guard_signup()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from public.staff
+     where lower(email) = lower(new.email) and active and user_id is null
+  ) then
+    raise exception 'Questo indirizzo email non è tra quelli abilitati.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_guard on auth.users;
+create trigger on_auth_user_guard
+  before insert on auth.users
+  for each row execute function public.guard_signup();
+
+-- ---------------------------------------------------------------------
+-- 12. "Gestione personale" (solo coordinatrice)
+--     Marie può aggiungere operatori, modificarne i dati e fissare la data di fine servizio.
+--     NON può: creare altre coordinatrici, cambiare ruoli o collegamenti agli account,
+--     disattivare se stessa, eliminare persone che hanno già accesso o turni.
+--     (Dal pannello di Supabase, invece, chi amministra il sistema può fare tutto.)
+-- ---------------------------------------------------------------------
+create or replace function public.staff_protect()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then                                   -- pannello Supabase / amministrazione
+    if tg_op = 'DELETE' then return old; end if;
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.role <> 'operator' then
+      raise exception 'Da qui si possono aggiungere solo operatori.' using errcode = '42501';
+    end if;
+    new.user_id := null;
+    return new;
+  elsif tg_op = 'UPDATE' then
+    if new.role is distinct from old.role then
+      raise exception 'Il ruolo non si cambia da qui.' using errcode = '42501';
+    end if;
+    if new.user_id is distinct from old.user_id then
+      raise exception 'Il collegamento con l''account non si cambia da qui.' using errcode = '42501';
+    end if;
+    if new.email is distinct from old.email and old.user_id is not null then
+      raise exception 'L''email di chi ha già fatto il primo accesso non si cambia da qui.' using errcode = '42501';
+    end if;
+    if old.user_id = auth.uid() and (new.active is distinct from old.active or new.end_date is distinct from old.end_date) then
+      raise exception 'Non puoi disattivare il tuo stesso account.' using errcode = '42501';
+    end if;
+    return new;
+  else
+    if old.user_id is not null or exists (select 1 from public.shifts where staff_id = old.id) then
+      raise exception 'Una persona con accesso o con turni non si elimina: imposta la data di fine servizio.' using errcode = '42501';
+    end if;
+    return old;
+  end if;
+end;
+$$;
+
+drop trigger if exists staff_protect_trg on public.staff;
+create trigger staff_protect_trg
+  before insert or update or delete on public.staff
+  for each row execute function public.staff_protect();
+
+-- Elenco completo (con email e ore di contratto): lo vede solo la coordinatrice
+create or replace function public.elenco_personale()
+returns table (
+  id bigint, name text, email text, role text, sort_order int, active boolean,
+  fixed_pattern boolean, contract_hours numeric, start_date date, end_date date, ha_accesso boolean
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.id, s.name, s.email, s.role, s.sort_order, s.active, s.fixed_pattern,
+         s.contract_hours, s.start_date, s.end_date, (s.user_id is not null)
+    from public.staff s
+   where public.is_coordinator()
+   order by s.sort_order, s.name;
+$$;
+revoke all on function public.elenco_personale() from public;
+grant execute on function public.elenco_personale() to authenticated;
