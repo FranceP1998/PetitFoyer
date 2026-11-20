@@ -173,7 +173,11 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 .consenso.notifica { background: #eef5ff; border-color: #b7cdee; }
 .mal-giorni { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
 .mal-giorni li { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
-.mal-giorni small { color: #77746c; }
+.mal-giorni .fatto { color: #3d7a4a; }
+.mal-azioni { display: flex; gap: 10px; align-items: center; }
+.cop-altro { border: 1px solid #e5e3dc; border-radius: 12px; padding: 8px 12px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.cop-altro legend { font-size: 13px; color: #77746c; padding: 0 6px; }
+.cop-altro select { padding: 7px 9px; border: 1px solid #c9c7c0; border-radius: 10px; }
 .ml-anteprima { font-size: 14px; margin: 6px 0 0; }
 .ml-anteprima ul { margin: 6px 0; padding-left: 20px; }
 button:disabled { opacity: .55; cursor: not-allowed; }
@@ -233,3 +237,6 @@ dialog.largo { width: min(680px, calc(100vw - 24px)); }
 .personale-lista .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef3ee; color: #1b6b3a; white-space: nowrap; }
 .personale-lista .tag.attesa { background: #fff2d6; color: #8a5a00; }
 .personale-lista button { padding: 6px 9px; }
+
+/* l'alone di focus resta solo per chi usa la tastiera, non dopo un tocco o all'apertura della finestra */
+.chip:focus:not(:focus-visible) { outline: none; box-shadow: none; }

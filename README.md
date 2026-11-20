@@ -23,8 +23,9 @@ con un piano di esempio di novembre 2026 (non è il piano vero) e senza account.
   inserite si tolgono solo con il consenso: un errore di battitura richiede quindi il consenso dell'operatore.
 - **Comunica malattia** (operatore): scrive primo e ultimo giorno del medico, vede l'anteprima e conferma. Sui giorni
   con un turno compare MU (riposi, ferie e permessi non si toccano; per le notti conta il giorno in cui inizia);
-  si salvano solo le date. Marie riceve la notifica nell'app, sceglie le coperture (+4 ore a chi sta prima e a chi
-  sta dopo) e solo allora i colleghi ricevono la loro notifica. Le regole sono nel database (sezione 15 di `schema.sql`).
+  si salvano solo le date. Marie riceve la notifica nell'app e per ogni turno sceglie la copertura: la proposta (+4 ore a chi
+  sta prima e a chi sta dopo) oppure un altro accordo (aggiunge la persona che copre, con i suoi orari). Solo allora i
+  colleghi ricevono la loro notifica e quel giorno risulta fatto da solo; a giorni finiti la segnalazione sparisce. Le regole sono nel database (sezione 15 di `schema.sql`).
 - Installabile sul telefono (PWA). Notifiche nell'app già attive per la malattia; le email e le notifiche sul telefono arrivano nei prossimi passi della fase 2.
 
 ## Installazione (circa 30 minuti)

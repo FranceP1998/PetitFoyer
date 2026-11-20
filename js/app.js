@@ -3,7 +3,7 @@ import { CONFIG } from './config.js';
 import { renderGrid, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from './grid.js';
 import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
-import { etichettaScostamento } from './cella.js';
+import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
 
 const $ = (id) => document.getElementById(id);
 const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
@@ -304,22 +304,28 @@ function disegnaMalattie() {
   const box = $('malattie');
   box.innerHTML = stato.malattie.map((r) => `<div class="consenso malattia">
     <p><b>${esc(nomePersona(r.staff_id))}</b> è in malattia dal ${dataIt(r.first_day)} al ${dataIt(r.last_day)}. Turni da coprire:</p>
-    <ul class="mal-giorni">${r.days.map((d, i) => `<li><span>${dataEstesa(d.date)} · ${TURNO_SALTATO[d.kind] || d.kind}</span>${
-      'MPN'.includes(d.kind) ? `<button type="button" data-mal="${r.id}" data-i="${i}">Scegli la copertura</button>` : '<small>da organizzare a mano</small>'}</li>`).join('')}</ul>
-    <div class="consenso-azioni"><button type="button" data-chiudi-mal="${r.id}">Ho finito: segna come gestita</button></div>
+    <ul class="mal-giorni">${r.days.map((d, i) => {
+      const nome = `${dataEstesa(d.date)} · ${TURNO_SALTATO[d.kind] || d.kind}`;
+      if (d.done) return `<li class="fatto"><span>✓ ${nome}</span><button type="button" class="link" data-mal="${r.id}" data-i="${i}">Cambia</button></li>`;
+      return `<li><span>${nome}</span><span class="mal-azioni">
+        <button type="button" data-mal="${r.id}" data-i="${i}">Scegli la copertura</button>
+        <button type="button" class="link" data-sistemata="${r.id}" data-i="${i}">Già sistemata</button></span></li>`;
+    }).join('')}</ul>
   </div>`).join('');
   box.hidden = !stato.malattie.length;
 }
 $('malattie').addEventListener('click', async (ev) => {
   const b = ev.target.closest('button'); if (!b) return;
   try {
-    if (b.dataset.chiudiMal) { await stato.be.chiudiMalattia(+b.dataset.chiudiMal); await carica(); return; }
-    if (b.dataset.mal) {
-      const r = stato.malattie.find((x) => x.id === +b.dataset.mal), d = r.days[+b.dataset.i];
-      const [yy, mm] = d.date.split('-').map(Number);
-      if (yy !== stato.y || mm !== stato.m) { stato.y = yy; stato.m = mm; await carica(); }       // la copertura si propone guardando quel mese
-      apriCopertura(r.staff_id, d.date, d.kind);
+    const id = b.dataset.mal || b.dataset.sistemata;
+    if (!id) return;
+    const r = stato.malattie.find((x) => x.id === +id), d = r.days[+b.dataset.i];
+    if (b.dataset.sistemata) {                      // sistemata a mano o senza copertura: il giorno risulta fatto senza altre modifiche
+      await stato.be.applicaCopertura(r.id, d.date, []); await carica(); return;
     }
+    const [yy, mm] = d.date.split('-').map(Number);
+    if (yy !== stato.y || mm !== stato.m) { stato.y = yy; stato.m = mm; await carica(); }       // la copertura si propone guardando quel mese
+    apriCopertura(r.staff_id, d.date, d.kind, { report: r.id, giorno: d.date });
   } catch (e) { alert(messaggio(e)); }
 });
 
@@ -434,7 +440,7 @@ function apriCella(staffId, data) {
     btn.hidden = true;
   }
   $('cella-svuota').disabled = bloccata;
-  if (!$('dlg-cella').open) $('dlg-cella').showModal();
+  if (!$('dlg-cella').open) { $('dlg-cella').showModal(); document.activeElement?.blur(); }   // niente alone sul primo simbolo (sembrava selezionato)
 }
 $('cella-annulla').onclick = () => $('dlg-cella').close();
 $('cella-svuota').onclick = async () => { await salvaCella([]); };
@@ -482,27 +488,48 @@ async function salvaCella(voci) {
 }
 
 // ------------------------------------------------------------ copertura di una malattia
+// La coordinatrice può accettare la proposta (+4 ore a chi sta prima e a chi sta dopo) oppure
+// aggiungere un'altra persona con gli orari concordati (copertura COP). Quando applica, il giorno risulta fatto.
 let copertura = null;
-function apriCopertura(staffId, data, turno) {
+function apriCopertura(staffId, data, turno, ctx = null) {
   const malato = nomePersona(staffId);
   const prop = proponiCopertura({ shifts: stato.dati.shifts, staff: stato.dati.staff, staffId, date: data, turno });
   const voci = [];
-  if (prop.prima) voci.push({ ...prop.prima, ruolo: 'turno prima', verbo: `resta fino alle ${prop.prima.fine}` });
-  if (prop.dopo) voci.push({ ...prop.dopo, ruolo: 'turno dopo', verbo: `entra alle ${prop.dopo.inizio}` });
-  copertura = voci;
-  $('cop-testo').textContent = `${malato} in malattia, ${dataEstesa(data)} (turno ${turno}). Per coprire le 8 ore, ${prop.ore} ore a testa a chi sta prima e a chi sta dopo.`;
-  $('cop-righe').innerHTML = voci.length
-    ? voci.map((v, i) => `<label><input type="checkbox" data-i="${i}" checked><span><b>${v.nome}</b> (${v.ruolo}, ${dataEstesa(v.date)}): ${v.verbo} · ${v.inizio}–${v.fine} · <b>${etichettaScostamento(prop.ore)}</b> ore</span></label>`).join('')
-    : '<p>Non trovo nessuno nel turno prima o dopo: la copertura va organizzata a mano.</p>';
-  $('cop-si').hidden = !voci.length;
-  $('cop-no').textContent = voci.length ? 'Non ora' : 'Chiudi';
+  if (prop.prima) voci.push({ ...prop.prima, ruolo: 'turno prima', verbo: `resta fino alle ${prop.prima.fine}`, scost: prop.ore, kindScost: 'fine' });
+  if (prop.dopo) voci.push({ ...prop.dopo, ruolo: 'turno dopo', verbo: `entra alle ${prop.dopo.inizio}`, scost: prop.ore, kindScost: 'inizio' });
+  const sk = stato.dati.shifts.find((x) => x.staff_id === staffId && x.date === data && x.kind === turno);
+  const [s0, e0] = STANDARD[turno] || ['', ''];
+  copertura = { voci, ctx, staffId, data, turno, inizio: String(sk?.start_time || s0).slice(0, 5), fine: String(sk?.end_time || e0).slice(0, 5) };
+  $('cop-testo').textContent = `${malato} in malattia, ${dataEstesa(data)} (turno ${turno}). Proposta: ${prop.ore} ore a testa a chi sta prima e a chi sta dopo. Se ci sono altri accordi, aggiungi la persona che copre.`;
+  // chi può essere aggiunto: chiunque in servizio, tranne il malato e chi è a sua volta in malattia quel giorno
+  const inMal = new Set(stato.dati.shifts.filter((x) => x.date === data && x.kind === 'MU').map((x) => x.staff_id));
+  const candidati = stato.dati.staff.filter((p) => p.id !== staffId && !inMal.has(p.id) && inServizio(p, +data.slice(0, 4), +data.slice(5, 7)));
+  $('cop-chi').innerHTML = candidati.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  $('cop2-da').value = copertura.inizio; $('cop2-a').value = copertura.fine;
+  disegnaProposte();
   $('dlg-copertura').showModal();
 }
+function disegnaProposte() {
+  const voci = copertura.voci;
+  $('cop-righe').innerHTML = voci.length
+    ? voci.map((v, i) => `<label><input type="checkbox" data-i="${i}" checked><span><b>${esc(v.nome)}</b> (${v.ruolo}, ${dataEstesa(v.date)}): ${v.verbo} · ${v.inizio}–${v.fine}${v.scost ? ` · <b>${etichettaScostamento(v.scost)}</b> ore` : ''}</span></label>`).join('')
+    : '<p>Non c\'è nessuno nel turno prima o dopo: aggiungi tu chi copre, oppure sistema a mano.</p>';
+  $('cop-si').hidden = !voci.length;
+  $('cop-no').textContent = 'Non ora';
+}
+$('cop-aggiungi').onclick = () => {
+  const id = +$('cop-chi').value, da = $('cop2-da').value, a = $('cop2-a').value;
+  if (!id) return;
+  if (!da || !a || da === a) { alert('Indica l\'ora di inizio e di fine della copertura.'); return; }
+  const nome = nomePersona(id);
+  copertura.voci.push({ staffId: id, nome, date: copertura.data, kind: 'COP', inizio: da, fine: a, ruolo: 'altro accordo', verbo: `copre dalle ${da} alle ${a}` });
+  disegnaProposte();
+};
 $('cop-no').onclick = () => $('dlg-copertura').close();
 $('cop-si').onclick = async () => {
-  const scelte = [...$('cop-righe').querySelectorAll('input:checked')].map((i) => copertura[+i.dataset.i]);
+  const scelte = [...$('cop-righe').querySelectorAll('input:checked')].map((i) => copertura.voci[+i.dataset.i]);
   try {
-    for (const v of scelte) await stato.be.confermaCopertura(v.staffId, v.date, v.kind, v.inizio, v.fine);   // cambia l'orario e avvisa il collega
+    await stato.be.applicaCopertura(copertura.ctx?.report || null, copertura.ctx?.giorno || null, scelte);   // cambia gli orari, avvisa i colleghi, segna il giorno come fatto
   } catch (e) { alert('Non sono riuscito ad applicare: ' + e.message); return; }
   $('dlg-copertura').close();
   await carica();

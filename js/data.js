@@ -94,13 +94,35 @@ function backendDemo() {
     },
     async elencaMalattie() { return (db.sick || []).filter((r) => r.status === 'open'); },
     async chiudiMalattia(id) { const r = (db.sick || []).find((x) => x.id === id); if (r) { r.status = 'closed'; salva(); } },
-    async confermaCopertura(staffId, data, kind, inizio, fine) {
-      const r = db.shifts.find((s) => s.staff_id === staffId && s.date === data && s.kind === kind);
-      if (!r) throw new Error('Turno non trovato.');
-      r.start_time = inizio; r.end_time = fine;
+    // applica la copertura di un giorno di malattia: orari ai colleghi vicini e/o altre persone in copertura (COP);
+    // il giorno risulta "fatto" e, a giorni finiti, la segnalazione si chiude da sola
+    async applicaCopertura(report, giorno, voci) {
       db.notifiche = db.notifiche || [];
-      db.notifiche.push({ id: nextId++, staff_id: staffId, kind: 'copertura', created_at: new Date().toISOString(), read_at: null,
-        text: `Il tuo turno ${kind} del ${data.slice(8, 10)}/${data.slice(5, 7)} è stato modificato per una copertura: orario ${inizio}–${fine}. Controlla il foglio.` });
+      const gm = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+      for (const v of voci) {
+        if (!v.inizio || !v.fine || v.inizio === v.fine) throw new Error('Indica l\'ora di inizio e di fine.');
+        if (db.shifts.some((s) => s.staff_id === v.staffId && s.date === v.date && s.kind === 'MU')) throw new Error('Una persona in malattia non può fare la copertura.');
+      }
+      for (const v of voci) {
+        if (v.kind === 'COP') {
+          const r = db.shifts.find((s) => s.staff_id === v.staffId && s.date === v.date && s.kind === 'COP');
+          if (r) { r.start_time = v.inizio; r.end_time = v.fine; }
+          else db.shifts.push({ id: nextId++, staff_id: v.staffId, date: v.date, kind: 'COP', requested: false, start_time: v.inizio, end_time: v.fine });
+          db.notifiche.push({ id: nextId++, staff_id: v.staffId, kind: 'copertura', created_at: new Date().toISOString(), read_at: null,
+            text: `Ti è stata assegnata una copertura il ${gm(v.date)} dalle ${v.inizio} alle ${v.fine}. Controlla il foglio.` });
+        } else {
+          const r = db.shifts.find((s) => s.staff_id === v.staffId && s.date === v.date && s.kind === v.kind);
+          if (!r) throw new Error('Turno non trovato.');
+          r.start_time = v.inizio; r.end_time = v.fine;
+          db.notifiche.push({ id: nextId++, staff_id: v.staffId, kind: 'copertura', created_at: new Date().toISOString(), read_at: null,
+            text: `Il tuo turno ${v.kind} del ${gm(v.date)} è stato modificato per una copertura: orario ${v.inizio}–${v.fine}. Controlla il foglio.` });
+        }
+      }
+      const rep = report ? (db.sick || []).find((x) => x.id === report) : null;
+      if (rep && giorno) {
+        for (const d of rep.days) if (d.date === giorno) d.done = true;
+        if (rep.days.every((d) => d.done)) rep.status = 'closed';
+      }
       salva();
     },
     async elencaNotifiche() { const u = utente(); return (db.notifiche || []).filter((n) => n.staff_id === u.staffId && !n.read_at).sort((x, y) => y.created_at.localeCompare(x.created_at)); },
@@ -296,8 +318,11 @@ async function backendSupabase() {
     async comunicaMalattia(da, a) { return errore(await sb.rpc('comunica_malattia', { p_from: da, p_to: a })); },
     async elencaMalattie() { return errore(await sb.from('sick_reports').select('id,staff_id,first_day,last_day,days,status,created_at').eq('status', 'open').order('created_at')); },
     async chiudiMalattia(id) { errore(await sb.rpc('chiudi_malattia', { p_id: id })); },
-    async confermaCopertura(staffId, data, kind, inizio, fine) {
-      errore(await sb.rpc('conferma_copertura', { p_staff: staffId, p_date: data, p_kind: kind, p_start: inizio, p_end: fine }));
+    async applicaCopertura(report, giorno, voci) {
+      errore(await sb.rpc('applica_copertura', {
+        p_report: report || null, p_giorno: giorno || null,
+        p_voci: voci.map((v) => ({ staff: v.staffId, date: v.date, kind: v.kind, start: v.inizio, end: v.fine })),
+      }));
     },
     // ---- notifiche nell'app
     async elencaNotifiche() { return errore(await sb.from('notifications').select('id,kind,text,created_at').is('read_at', null).order('created_at', { ascending: false })); },

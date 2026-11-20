@@ -157,6 +157,12 @@
     <h2>Copertura della malattia</h2>
     <p class="muted" id="cop-testo"></p>
     <div id="cop-righe" class="cop-righe"></div>
+    <fieldset class="cop-altro">
+      <legend>Altro accordo: aggiungi chi copre</legend>
+      <select id="cop-chi" aria-label="Chi copre"></select>
+      <span>dalle</span> <input type="time" id="cop2-da" step="900"> <span>alle</span> <input type="time" id="cop2-a" step="900">
+      <button type="button" id="cop-aggiungi">Aggiungi</button>
+    </fieldset>
     <div class="dlg-azioni">
       <span class="spazio"></span>
       <button type="button" id="cop-no">Non ora</button>

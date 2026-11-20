@@ -689,26 +689,64 @@ begin
 end;
 $$;
 
--- La coordinatrice conferma l'orario di copertura di un collega: SOLO ora il collega riceve la notifica
-create or replace function public.conferma_copertura(p_staff bigint, p_date date, p_kind text, p_start time, p_end time)
+-- La coordinatrice applica la copertura di un giorno di malattia: orari cambiati ai colleghi vicini
+-- e/o altre persone messe in copertura (COP) per accordi presi. SOLO ora i colleghi ricevono la notifica.
+-- Il giorno risulta "fatto" da solo; quando tutti i giorni della malattia sono fatti, la segnalazione si chiude.
+-- p_voci = [{"staff": 5, "date": "2026-11-07", "kind": "M"|"P"|"N"|"COP", "start": "07:00", "end": "19:00"}, ...]
+-- (può essere vuoto: "già sistemata" / nessuna copertura). Senza p_report si applicano solo le voci.
+drop function if exists public.conferma_copertura(bigint, date, text, time, time);
+create or replace function public.applica_copertura(p_report bigint, p_giorno date, p_voci jsonb)
 returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare v jsonb; v_staff bigint; v_date date; v_kind text; v_s time; v_e time; v_days jsonb; v_aperti int;
 begin
   if not public.is_coordinator() then
     raise exception 'Solo la coordinatrice.' using errcode = '42501';
   end if;
-  if p_kind not in ('M','P','N') then raise exception 'Turno non valido.' using errcode = '22023'; end if;
-  update public.shifts set start_time = p_start, end_time = p_end
-   where staff_id = p_staff and date = p_date and kind = p_kind;
-  if not found then raise exception 'Turno non trovato.' using errcode = '22023'; end if;
-  insert into public.notifications (staff_id, kind, text, data)
-  values (p_staff, 'copertura',
-          'Il tuo turno ' || p_kind || ' del ' || to_char(p_date, 'DD/MM') || ' è stato modificato per una copertura: orario ' ||
-          to_char(p_start, 'HH24:MI') || '–' || to_char(p_end, 'HH24:MI') || '. Controlla il foglio.',
-          jsonb_build_object('date', p_date, 'kind', p_kind));
+  for v in select * from jsonb_array_elements(coalesce(p_voci, '[]'::jsonb)) loop
+    v_staff := (v->>'staff')::bigint; v_date := (v->>'date')::date; v_kind := v->>'kind';
+    v_s := (v->>'start')::time; v_e := (v->>'end')::time;
+    if v_kind not in ('M','P','N','COP') then raise exception 'Turno non valido.' using errcode = '22023'; end if;
+    if v_s is null or v_e is null or v_s = v_e then raise exception 'Indica l''ora di inizio e di fine.' using errcode = '22023'; end if;
+    if exists (select 1 from public.shifts where staff_id = v_staff and date = v_date and kind = 'MU') then
+      raise exception 'Una persona in malattia non può fare la copertura.' using errcode = '22023';
+    end if;
+    if v_kind = 'COP' then
+      insert into public.shifts (staff_id, date, kind, start_time, end_time) values (v_staff, v_date, 'COP', v_s, v_e)
+      on conflict (staff_id, date, kind) do update set start_time = excluded.start_time, end_time = excluded.end_time;
+      insert into public.notifications (staff_id, kind, text, data)
+      values (v_staff, 'copertura',
+              'Ti è stata assegnata una copertura il ' || to_char(v_date, 'DD/MM') || ' dalle ' || to_char(v_s, 'HH24:MI') ||
+              ' alle ' || to_char(v_e, 'HH24:MI') || '. Controlla il foglio.',
+              jsonb_build_object('date', v_date, 'kind', 'COP'));
+    else
+      update public.shifts set start_time = v_s, end_time = v_e
+       where staff_id = v_staff and date = v_date and kind = v_kind;
+      if not found then raise exception 'Turno non trovato.' using errcode = '22023'; end if;
+      insert into public.notifications (staff_id, kind, text, data)
+      values (v_staff, 'copertura',
+              'Il tuo turno ' || v_kind || ' del ' || to_char(v_date, 'DD/MM') || ' è stato modificato per una copertura: orario ' ||
+              to_char(v_s, 'HH24:MI') || '–' || to_char(v_e, 'HH24:MI') || '. Controlla il foglio.',
+              jsonb_build_object('date', v_date, 'kind', v_kind));
+    end if;
+  end loop;
+
+  if p_report is not null and p_giorno is not null then
+    select coalesce(jsonb_agg(case when e->>'date' = p_giorno::text then e || '{"done": true}'::jsonb else e end order by o), '[]'::jsonb)
+      into v_days
+      from public.sick_reports r, jsonb_array_elements(r.days) with ordinality as t(e, o)
+     where r.id = p_report;
+    if v_days = '[]'::jsonb then raise exception 'Segnalazione non trovata.' using errcode = '22023'; end if;
+    select count(*) into v_aperti from jsonb_array_elements(v_days) e where coalesce((e->>'done')::boolean, false) = false;
+    update public.sick_reports
+       set days = v_days,
+           status = case when v_aperti = 0 then 'closed' else 'open' end,
+           closed_at = case when v_aperti = 0 then now() else null end
+     where id = p_report;
+  end if;
 end;
 $$;
 
@@ -735,10 +773,10 @@ as $$
 $$;
 
 revoke all on function public.anteprima_malattia(date, date), public.comunica_malattia(date, date),
-  public.conferma_copertura(bigint, date, text, time, time), public.chiudi_malattia(bigint),
+  public.applica_copertura(bigint, date, jsonb), public.chiudi_malattia(bigint),
   public.segna_notifica_letta(bigint) from public;
 grant execute on function public.anteprima_malattia(date, date), public.comunica_malattia(date, date),
-  public.conferma_copertura(bigint, date, text, time, time), public.chiudi_malattia(bigint),
+  public.applica_copertura(bigint, date, jsonb), public.chiudi_malattia(bigint),
   public.segna_notifica_letta(bigint) to authenticated;
 
 alter table public.notifications enable row level security;
