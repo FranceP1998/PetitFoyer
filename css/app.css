@@ -262,3 +262,7 @@ table.foglio td.in-attesa.critica { outline-color: #b58900; background-color: #f
 .ric-lista .motivo { display: block; font-size: 12px; color: #555; font-style: italic; margin-top: 2px; }
 .ric-lista .ric-motivo { display: block; width: 100%; margin-top: 6px; }
 .ric-lista li.col { flex-wrap: wrap; }
+
+/* operatore: con le richieste aperte, i giorni della propria riga si cliccano per chiedere */
+.richiedibile tr.mia td[data-p] { cursor: pointer; }
+.richiedibile tr.mia td[data-p]:hover { outline: 2px solid var(--accento); outline-offset: -2px; background-color: #eef5ff; }

@@ -32,7 +32,7 @@ const ESCLUSIVI = ['M', 'P', 'N', 'R', 'RR', 'F', 'FS', 'PERM', 'T1018'];
 const PER_MALATTIA = ['M', 'P', 'N', 'T1018', 'COP', 'SPESA', 'RB'];
 const SENZA_MALATTIA = ['R', 'RR', 'F', 'FS', 'PERM'];
 
-const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [], notifiche: [], malattie: [], richieste: [] };
+const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [], notifiche: [], malattie: [], richieste: [], mesiAperti: [] };
 const valido = (s) => s.status === 'approved' && Date.now() - Date.parse(s.decided_at) < 24 * 3600 * 1000;
 const NOMI_PROTETTI = { F: 'ferie', FS: 'domenica dentro ferie o permessi', PERM: 'permesso', RR: 'riposo richiesto', M: 'turno richiesto', P: 'turno richiesto', N: 'turno richiesto' };
 const elencoProtetti = (kinds) => [...new Set(String(kinds || '').split(',').filter(Boolean).map((k) => NOMI_PROTETTI[k] || k))].join(', ');
@@ -144,6 +144,7 @@ async function carica() {
   try { stato.notifiche = await stato.be.elencaNotifiche(); } catch { stato.notifiche = []; }
   try { stato.malattie = isCoord() ? await stato.be.elencaMalattie() : []; } catch { stato.malattie = []; }
   try { stato.richieste = await stato.be.elencaRichieste(stato.y, stato.m); } catch { stato.richieste = []; }
+  try { stato.mesiAperti = isCoord() ? [] : await stato.be.mesiRichieste(); } catch { stato.mesiAperti = []; }
   disegna();
 }
 
@@ -161,6 +162,8 @@ function richiestePerFoglio() {
     staff_id: r.staff_id, date: r.date, kind: r.kind, requested: r.kind !== 'RR', pending: true, critica: (r.avvisi || []).length > 0,
   }));
 }
+
+const meseAperto = (y, m) => stato.mesiAperti.find((x) => x.year === y && x.month === m) || null;
 
 function disegna() {
   const { month, staff, shifts, events } = stato.dati;
@@ -181,6 +184,11 @@ function disegna() {
     ? 'Piano in preparazione: per ora vedi solo ferie, permessi e richieste di tutti. I turni compaiono quando Marie pubblica.'
     : (isCoord() && !pubblicato ? 'Bozza: gli operatori ne vedono solo ferie, permessi e richieste, finché non la pubblichi.' : ''));
   $('pagina').hidden = false;
+  const aperto = meseAperto(stato.y, stato.m);
+  if (!isCoord() && aperto) {
+    mostraMessaggio(`Richieste aperte fino al ${aperto.scadenza.slice(8, 10)}/${aperto.scadenza.slice(5, 7)}: clicca su un giorno della tua riga per chiedere un riposo o un turno. ` + (pubblicato ? '' : 'Piano in preparazione: per ora vedi solo ferie, permessi e richieste di tutti.'));
+  }
+  $('foglio').classList.toggle('richiedibile', !isCoord() && !!aperto);
   $('btn-pdf').hidden = !isCoord() && !pubblicato;
   const inAttesa = isCoord() ? stato.richieste.filter((r) => r.status === 'pending').length : 0;
   $('btn-richieste').textContent = inAttesa ? `Richieste (${inAttesa})` : 'Richieste';
@@ -315,7 +323,7 @@ let ricMeseOp = null;                                  // mese scelto dall'opera
 function ricErrore(t) { $('ric-err').textContent = t || ''; $('ric-err').hidden = !t; }
 const ricMese = () => (isCoord() ? { year: stato.y, month: stato.m } : (ricMeseOp || { year: stato.y, month: stato.m }));
 
-async function apriRichieste() {
+async function apriRichieste(dataScelta = null) {
   ricErrore('');
   $('ric-coord').hidden = !isCoord(); $('ric-op').hidden = isCoord();
   if (isCoord()) {
@@ -327,7 +335,9 @@ async function apriRichieste() {
     try { mesi = await stato.be.mesiRichieste(); } catch (e) { ricErrore(messaggio(e)); }
     $('ric-mese').innerHTML = mesi.map((x, i) => `<option value="${i}">${nomeMese(x.month)} ${x.year}</option>`).join('');
     $('ric-mese').onchange = () => { ricMeseOp = mesi[+$('ric-mese').value]; disegnaRichieste(); };
-    ricMeseOp = mesi[0] || null;
+    ricMeseOp = (dataScelta && mesi.find((x) => x.year === +dataScelta.slice(0, 4) && x.month === +dataScelta.slice(5, 7))) || mesi[0] || null;
+    if (ricMeseOp) $('ric-mese').value = String(mesi.indexOf(ricMeseOp));
+    if (dataScelta && ricMeseOp && ricMeseOp.year === +dataScelta.slice(0, 4) && ricMeseOp.month === +dataScelta.slice(5, 7)) $('ric-data').value = dataScelta;
     $('ric-op').hidden = !mesi.length;
     $('ric-testo').textContent = mesi.length
       ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese. Ferie e permessi sono un'altra cosa. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Le richieste non esaminate entro il 20 valgono come accettate. Qui vedi anche quelle dei colleghi.`
@@ -381,7 +391,7 @@ async function disegnaRichieste() {
   $('btn-richieste').textContent = isCoord() && stato.richieste.some((r) => r.status === 'pending') ? `Richieste (${stato.richieste.filter((r) => r.status === 'pending').length})` : 'Richieste';
 }
 
-$('btn-richieste').onclick = apriRichieste;
+$('btn-richieste').onclick = () => apriRichieste();
 $('ric-chiudi').onclick = async () => { $('dlg-richieste').close(); await carica(); };
 $('ric-invia').onclick = async () => {
   ricErrore('');
@@ -491,7 +501,15 @@ $('ml-conferma').onclick = async () => {
 // ------------------------------------------------------------ modifica cella
 let cellaCorrente = null;
 $('foglio').addEventListener('click', (ev) => {
-  if (!isCoord() || !stato.modifica) return;
+  // operatore: un clic su un giorno della propria riga apre la richiesta per quel giorno (se le richieste sono aperte)
+  if (!isCoord()) {
+    const c = ev.target.closest('td[data-p]');
+    if (!c || +c.dataset.p !== stato.utente.staffId) return;
+    if (!meseAperto(+c.dataset.d.slice(0, 4), +c.dataset.d.slice(5, 7))) return;
+    apriRichieste(c.dataset.d);
+    return;
+  }
+  if (!stato.modifica) return;
   const td = ev.target.closest('td[data-staff]');
   if (!td) return;
   apriCella(+td.dataset.staff, td.dataset.date);
