@@ -1,4 +1,4 @@
-import { descriviCella, notteFinisceDa, scostamento } from './cella.js';
+import { descriviCella, notteFinisceDa, scostamento, inServizio } from './cella.js';
 
 // Disegna il foglio turni come tabella HTML (stesso schema del foglio cartaceo):
 // due righe per persona (M sopra, P sotto), giorni in orizzontale, ultima colonna = 1° del mese dopo.
@@ -107,7 +107,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
   const classiCol = (c) =>
     [c.sun ? 'sun' : '', c.weekEnd ? 'wk' : '', c.extra ? 'extra' : '', c.collettivo ? 'ev-coll' : ''].filter(Boolean).join(' ');
 
-  const ordinati = [...staff].filter((s) => s.active !== false).sort((a, b) => a.sort_order - b.sort_order);
+  const ordinati = [...staff].filter((s) => inServizio(s, year, month)).sort((a, b) => a.sort_order - b.sort_order);
 
   // ---------- intestazione ----------
   let html = `<table class="foglio" style="width:calc(var(--nome) + ${cols.length} * var(--s))"><colgroup><col class="c-nome">`;

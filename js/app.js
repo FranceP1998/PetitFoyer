@@ -51,24 +51,69 @@ async function avvia() {
     $('demo-reset').onclick = () => stato.be.azzeraDemo();
     if (!location.hash) { stato.y = 2026; stato.m = 11; }          // il demo parte da novembre 2026
   }
-  try { stato.utente = await stato.be.sessione(); } catch (e) { mostraAccesso(e.message); return; }
+  try {
+    if (await stato.be.servePassword()) { mostraAccesso('password'); return; }   // codice già confermato, manca la password
+    stato.utente = await stato.be.sessione();
+  } catch (e) { mostraAccesso('accesso', e.message); return; }
   if (!stato.utente) { mostraAccesso(); return; }
   await mostra();
 }
 
-function mostraAccesso(errore) {
+// ------------------------------------------------------------ accesso
+const PASSI = ['f-accesso', 'f-email', 'f-codice', 'f-password'];
+let emailPrimo = '';
+function passo(id, errore, ok) {
   $('app').hidden = true; $('login').hidden = false;
-  if (errore) { $('login-err').textContent = errore; $('login-err').hidden = false; }
-  $('login-form').onsubmit = async (ev) => {
-    ev.preventDefault();
-    $('login-err').hidden = true;
-    try {
-      stato.utente = await stato.be.accedi($('login-email').value.trim(), $('login-pass').value);
-      $('login').hidden = true;
-      await mostra();
-    } catch (e) { $('login-err').textContent = e.message; $('login-err').hidden = false; }
-  };
+  for (const p of PASSI) $(p).hidden = p !== id;
+  $('login-err').textContent = errore || ''; $('login-err').hidden = !errore;
+  $('login-ok').textContent = ok || ''; $('login-ok').hidden = !ok;
 }
+const messaggio = (e) => e?.message || String(e);
+function mostraAccesso(quale = 'accesso', errore) {
+  passo(quale === 'password' ? 'f-password' : 'f-accesso', errore);
+}
+async function entra() { $('login').hidden = true; await mostra(); }
+$('f-accesso').onsubmit = async (ev) => {
+  ev.preventDefault(); passo('f-accesso');
+  try {
+    stato.utente = await stato.be.accedi($('login-email').value.trim(), $('login-pass').value);
+    $('login-pass').value = '';
+    await entra();
+  } catch (e) { passo('f-accesso', messaggio(e)); }
+};
+$('vai-primo').onclick = () => { $('primo-email').value = $('login-email').value; passo('f-email'); };
+for (const b of document.querySelectorAll('[data-torna]')) b.onclick = () => passo('f-accesso');
+async function inviaCodice(ev) {
+  ev?.preventDefault();
+  emailPrimo = $('primo-email').value.trim().toLowerCase() || emailPrimo;
+  try {
+    await stato.be.richiediCodice(emailPrimo);
+    $('codice-testo').textContent = `Ho inviato un codice a ${emailPrimo}. Controlla la posta (anche lo spam) e scrivilo qui sotto.`;
+    $('primo-codice').value = '';
+    passo('f-codice', '', ev ? '' : 'Nuovo codice inviato.');
+  } catch (e) { passo(ev ? 'f-email' : 'f-codice', messaggio(e)); }
+}
+$('f-email').onsubmit = inviaCodice;
+$('codice-richiedi').onclick = () => inviaCodice(null);
+$('f-codice').onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    await stato.be.verificaCodice(emailPrimo, $('primo-codice').value.trim());
+    $('pw1').value = ''; $('pw2').value = '';
+    passo('f-password');
+  } catch (e) { passo('f-codice', messaggio(e)); }
+};
+$('f-password').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const a = $('pw1').value;
+  if (a.length < 8) { passo('f-password', 'La password deve avere almeno 8 caratteri.'); return; }
+  if (a !== $('pw2').value) { passo('f-password', 'Le due password non coincidono.'); return; }
+  try {
+    stato.utente = await stato.be.impostaPassword(a);
+    $('pw1').value = ''; $('pw2').value = '';
+    await entra();
+  } catch (e) { passo('f-password', messaggio(e)); }
+};
 
 async function mostra() {
   $('login').hidden = true; $('app').hidden = false;
@@ -76,6 +121,7 @@ async function mostra() {
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   $('utente').textContent = stato.utente.name;
   $('btn-esci').hidden = stato.be.demo;
+  $('btn-password').hidden = stato.be.demo;
   await carica();
 }
 
@@ -369,6 +415,108 @@ $('ev-aggiungi').onclick = async () => {
   });
   $('ev-label').value = '';
   await carica(); elencaEventi();
+};
+
+// ------------------------------------------------------------ cambio password
+function cambioErrore(t) { $('cambio-err').textContent = t || ''; $('cambio-err').hidden = !t; }
+$('btn-password').onclick = () => {
+  cambioErrore('');
+  $('cambio-testo').textContent = 'Per sicurezza ti mando un codice alla tua email.';
+  $('cambio-invia').hidden = false; $('cambio-campi').hidden = true; $('cambio-salva').hidden = true;
+  for (const i of ['cambio-codice', 'cambio-pw1', 'cambio-pw2']) $(i).value = '';
+  $('dlg-password').showModal();
+};
+$('cambio-chiudi').onclick = () => $('dlg-password').close();
+$('cambio-invia').onclick = async () => {
+  cambioErrore('');
+  try {
+    await stato.be.codicePerCambio();
+    $('cambio-testo').textContent = 'Ti ho inviato un codice via email. Scrivilo qui sotto con la nuova password.';
+    $('cambio-invia').hidden = true; $('cambio-campi').hidden = false; $('cambio-salva').hidden = false;
+  } catch (e) { cambioErrore(messaggio(e)); }
+};
+$('cambio-salva').onclick = async () => {
+  const a = $('cambio-pw1').value;
+  if (!$('cambio-codice').value.trim()) return cambioErrore('Scrivi il codice ricevuto per email.');
+  if (a.length < 8) return cambioErrore('La password deve avere almeno 8 caratteri.');
+  if (a !== $('cambio-pw2').value) return cambioErrore('Le due password non coincidono.');
+  try {
+    await stato.be.cambiaPassword(a, $('cambio-codice').value.trim());
+    $('dlg-password').close();
+    mostraMessaggio('Password cambiata.'); setTimeout(() => { if ($('messaggio').textContent === 'Password cambiata.') disegna(); }, 3000);
+  } catch (e) { cambioErrore(messaggio(e)); }
+};
+
+// ------------------------------------------------------------ gestione personale
+let personale = [];
+const oggiIso = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const dataIt = (d) => d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : '';
+const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+async function elencaPersonale() {
+  try { personale = await stato.be.elencoPersonale(); } catch (e) { $('personale-lista').innerHTML = `<li class="err">${esc(messaggio(e))}</li>`; return; }
+  const oggi = oggiIso();
+  $('personale-lista').innerHTML = personale.map((p, i) => {
+    const finito = p.end_date && p.end_date < oggi;
+    const tag = p.role === 'coordinator' ? '<span class="tag">Coordinatrice</span>' : (p.ha_accesso ? '<span class="tag">Ha già l\'accesso</span>' : '<span class="tag attesa">Non ha ancora fatto il primo accesso</span>');
+    const date = [p.start_date ? 'dal ' + dataIt(p.start_date) : '', p.end_date ? (finito ? 'fino al ' : 'fino al ') + dataIt(p.end_date) : ''].filter(Boolean).join(' ');
+    return `<li class="${finito ? 'finito' : ''}"><span class="chi"><b>${esc(p.name)}</b><small>${esc(p.email || 'senza email')}${date ? ' · ' + date : ''}</small></span>${tag}
+      <button type="button" data-su="${i}" aria-label="Sposta su" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" data-giu="${i}" aria-label="Sposta giù" ${i === personale.length - 1 ? 'disabled' : ''}>↓</button>
+      <button type="button" data-mod="${i}">Modifica</button></li>`;
+  }).join('');
+}
+$('btn-personale').onclick = async () => { await elencaPersonale(); $('dlg-personale').showModal(); };
+$('personale-chiudi').onclick = async () => { $('dlg-personale').close(); await carica(); };
+$('personale-lista').onclick = async (ev) => {
+  const d = ev.target.dataset; if (!d) return;
+  if (d.mod !== undefined) return apriPersona(personale[+d.mod]);
+  const da = d.su !== undefined ? +d.su : d.giu !== undefined ? +d.giu : null;
+  if (da === null) return;
+  const a = d.su !== undefined ? da - 1 : da + 1;
+  // riscrive l'ordine con numeri distinti, scambiando le due posizioni
+  const ordine = personale.map((p) => p.id); [ordine[da], ordine[a]] = [ordine[a], ordine[da]];
+  try {
+    for (let k = 0; k < ordine.length; k++) { const p = personale.find((x) => x.id === ordine[k]); if (p.sort_order !== (k + 1) * 10) await stato.be.ordinaPersona(p.id, (k + 1) * 10); }
+  } catch (e) { alert(messaggio(e)); }
+  await elencaPersonale();
+};
+let personaCorrente = null;
+function personaErrore(t) { $('persona-err').textContent = t || ''; $('persona-err').hidden = !t; }
+function apriPersona(p) {
+  personaCorrente = p || null; personaErrore('');
+  $('persona-titolo').textContent = p ? `Modifica ${p.name}` : 'Nuovo operatore';
+  $('pe-nome').value = p?.name || ''; $('pe-email').value = p?.email || '';
+  const bloccata = !!p?.ha_accesso;
+  $('pe-email').disabled = bloccata; $('pe-email-nota').hidden = !bloccata;
+  $('pe-inizio').value = p?.start_date || (p ? '' : oggiIso()); $('pe-fine').value = p?.end_date || '';
+  $('pe-ore').value = p?.contract_hours ?? ''; $('pe-fisso').checked = !!p?.fixed_pattern;
+  const coord = p?.role === 'coordinator';
+  $('pe-fine').disabled = coord || p?.user_id === stato.utente.staffId || p?.id === stato.utente.staffId;
+  $('pe-elimina').hidden = !p || coord;
+  $('dlg-persona').showModal();
+}
+$('personale-nuovo').onclick = () => apriPersona(null);
+$('pe-annulla').onclick = () => $('dlg-persona').close();
+$('pe-salva').onclick = async () => {
+  const nome = $('pe-nome').value.trim(), email = $('pe-email').value.trim().toLowerCase();
+  if (!nome) return personaErrore('Scrivi il nome.');
+  if (!personaCorrente?.ha_accesso && !email) return personaErrore('Scrivi l\'email di lavoro: serve per il primo accesso.');
+  const ini = $('pe-inizio').value, fin = $('pe-fine').value;
+  if (ini && fin && fin < ini) return personaErrore('L\'ultimo giorno non può essere prima del primo.');
+  const ore = $('pe-ore').value;
+  try {
+    await stato.be.salvaPersona({
+      id: personaCorrente?.id, name: nome, email, emailModificabile: !personaCorrente?.ha_accesso,
+      start_date: ini, end_date: fin, contract_hours: ore === '' ? null : +ore, fixed_pattern: $('pe-fisso').checked,
+      sort_order: (Math.max(0, ...personale.map((p) => p.sort_order || 0)) || 0) + 10,
+    });
+    $('dlg-persona').close(); await elencaPersonale();
+  } catch (e) { personaErrore(/duplicate|unique/i.test(messaggio(e)) ? 'Questa email è già usata da un\'altra persona.' : messaggio(e)); }
+};
+$('pe-elimina').onclick = async () => {
+  if (!personaCorrente) return;
+  if (!confirm(`Eliminare ${personaCorrente.name}? Si può fare solo se non ha mai avuto turni né accesso; altrimenti imposta la data di fine servizio.`)) return;
+  try { await stato.be.eliminaPersona(personaCorrente.id); $('dlg-persona').close(); await elencaPersonale(); }
+  catch (e) { personaErrore(messaggio(e)); }
 };
 
 avvia().catch((e) => mostraMessaggio('Errore: ' + e.message));

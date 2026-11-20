@@ -39,6 +39,22 @@ function backendDemo() {
     async sessione() { return utente(); },
     async accedi() { return utente(); },
     async esci() { /* niente */ },
+    async servePassword() { return false; },
+    // --- gestione personale (demo: tutto in locale)
+    async elencoPersonale() {
+      return [...db.staff].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map((p) => ({ email: p.email || `${p.name.toLowerCase()}@esempio.it`, contract_hours: null, start_date: null, end_date: null, ha_accesso: true, ...p }));
+    },
+    async salvaPersona(p) {
+      const campi = { name: p.name, email: p.email || null, fixed_pattern: !!p.fixed_pattern, contract_hours: p.contract_hours ?? null, start_date: p.start_date || null, end_date: p.end_date || null, sort_order: p.sort_order };
+      if (p.id) { Object.assign(db.staff.find((x) => x.id === p.id), campi); }
+      else { db.staff.push({ id: Math.max(0, ...db.staff.map((x) => x.id)) + 1, role: 'operator', active: true, ...campi }); }
+      salva();
+    },
+    async ordinaPersona(id, ordine) { db.staff.find((x) => x.id === id).sort_order = ordine; salva(); },
+    async eliminaPersona(id) {
+      if (db.shifts.some((s) => s.staff_id === id)) throw new Error('Una persona con turni non si elimina: imposta la data di fine servizio.');
+      db.staff = db.staff.filter((x) => x.id !== id); salva();
+    },
     cambiaRuoloDemo(r) { ruolo = r; scrivi('turni-demo-ruolo', r); },
     async caricaMese(y, m) {
       const { da, a } = intervallo(y, m);
@@ -105,6 +121,13 @@ function backendDemo() {
 }
 
 // ------------------------------------------------------------------ SUPABASE
+function traduciErrorePassword(m) {
+  if (/same|different from the old/i.test(m)) return 'La nuova password deve essere diversa dalla precedente.';
+  if (/weak|short|characters|at least/i.test(m)) return 'Password troppo debole: usane una più lunga.';
+  if (/nonce|reauth|expired|invalid/i.test(m)) return 'Codice non valido o scaduto.';
+  return m;
+}
+
 async function backendSupabase() {
   const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
   const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
@@ -130,10 +153,56 @@ async function backendSupabase() {
       return persona();
     },
     async esci() { await sb.auth.signOut(); },
+
+    // ---- primo accesso / password dimenticata: codice via email, poi scelta della password
+    async servePassword() {
+      const { data: { session } } = await sb.auth.getSession();
+      return !!session && !session.user.user_metadata?.password_set;
+    },
+    async richiediCodice(email) {
+      const r = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      if (r.error) {
+        const m = r.error.message || '';
+        if (/rate|seconds|too many/i.test(m)) throw new Error('Hai chiesto troppi codici: aspetta un minuto e riprova.');
+        if (/database error|not allowed|abilitat/i.test(m)) throw new Error('Questo indirizzo email non è abilitato. Chiedi a Marie di aggiungerti.');
+        throw new Error('Non riesco a inviare il codice: ' + m);
+      }
+    },
+    async verificaCodice(email, codice) {
+      const r = await sb.auth.verifyOtp({ email, token: codice, type: 'email' });
+      if (r.error) throw new Error('Codice non valido o scaduto. Riprova o chiedine uno nuovo.');
+    },
+    async impostaPassword(password) {
+      const r = await sb.auth.updateUser({ password, data: { password_set: true } });
+      if (r.error) throw new Error(traduciErrorePassword(r.error.message));
+      return persona();
+    },
+    // ---- cambio password da dentro l'app (serve un codice ricevuto per email)
+    async codicePerCambio() {
+      const r = await sb.auth.reauthenticate();
+      if (r.error) throw new Error('Non riesco a inviare il codice: ' + r.error.message);
+    },
+    async cambiaPassword(password, codice) {
+      const r = await sb.auth.updateUser({ password, nonce: codice });
+      if (r.error) throw new Error(traduciErrorePassword(r.error.message));
+    },
+    // ---- gestione personale (solo coordinatrice: lo garantisce il database)
+    async elencoPersonale() { return errore(await sb.rpc('elenco_personale')); },
+    async salvaPersona(p) {
+      const campi = { name: p.name, email: p.email || null, fixed_pattern: !!p.fixed_pattern, contract_hours: p.contract_hours ?? null, start_date: p.start_date || null, end_date: p.end_date || null };
+      if (p.id) {
+        if (!p.emailModificabile) delete campi.email;
+        errore(await sb.from('staff').update(campi).eq('id', p.id));
+      } else {
+        errore(await sb.from('staff').insert({ ...campi, role: 'operator', sort_order: p.sort_order }));
+      }
+    },
+    async ordinaPersona(id, ordine) { errore(await sb.from('staff').update({ sort_order: ordine }).eq('id', id)); },
+    async eliminaPersona(id) { errore(await sb.from('staff').delete().eq('id', id)); },
     async caricaMese(y, m) {
       const { da, a } = intervallo(y, m);
       const [staff, shifts, events, mese] = await Promise.all([
-        sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active').then(errore),
+        sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active,start_date,end_date').then(errore),
         sb.from('shifts').select('id,staff_id,date,kind,requested,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('events').select('id,date,kind,label,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('months').select('year,month,status,notes').eq('year', y).eq('month', m).maybeSingle().then(errore),

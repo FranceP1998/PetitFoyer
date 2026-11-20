@@ -203,3 +203,21 @@ body.operatore table.foglio tr.mia > td:last-child { border-right-color: var(--b
 .mu { font-size: calc(var(--s) * .52); font-weight: 400; letter-spacing: -.02em; }
 sup.delta { font-size: calc(var(--s) * .3); font-weight: 800; vertical-align: super; line-height: 0; margin-left: 1px; }
 sup.delta-notte { position: absolute; left: 3px; top: 4px; margin: 0; }
+
+/* accesso a passi */
+.card .passo { display: grid; gap: 12px; }
+.card .passo[hidden] { display: none; }
+.ok-msg { color: #1b6b3a; margin: 0; }
+.card .link { justify-self: start; padding-left: 0; }
+dialog .campi { display: grid; gap: 10px; margin: 10px 0; }
+dialog .campi label { display: grid; gap: 4px; font-size: 14px; }
+dialog .campi input[type=text], dialog .campi input[type=email], dialog .campi input[type=password], dialog .campi input[type=date], dialog .campi input[type=number] { padding: 9px 11px; border: 1px solid #c9c7c0; border-radius: 10px; }
+dialog.largo { width: min(680px, calc(100vw - 24px)); }
+.personale-lista { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 6px; }
+.personale-lista li { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid #e5e3dc; border-radius: 12px; }
+.personale-lista li.finito { opacity: .6; }
+.personale-lista .chi { flex: 1; min-width: 0; display: grid; }
+.personale-lista .chi small { color: #6b6a63; overflow: hidden; text-overflow: ellipsis; }
+.personale-lista .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef3ee; color: #1b6b3a; white-space: nowrap; }
+.personale-lista .tag.attesa { background: #fff2d6; color: #8a5a00; }
+.personale-lista button { padding: 6px 9px; }

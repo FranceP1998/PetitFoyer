@@ -101,3 +101,11 @@ export function descriviCella(kinds, notteFinisce) {
     notteFinisce: !!notteFinisce,
   };
 }
+
+// Una persona compare nel foglio del mese se in quel mese era in servizio
+// (le date di inizio e fine servizio decidono: così i mesi passati restano com'erano).
+export function inServizio(p, y, m) {
+  const primo = `${y}-${String(m).padStart(2, '0')}-01`;
+  const ultimo = `${y}-${String(m).padStart(2, '0')}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  return (!p.start_date || p.start_date <= ultimo) && (!p.end_date || p.end_date >= primo);
+}

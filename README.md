@@ -43,12 +43,20 @@ Nel repository c'è solo il codice: **nessun dato dei lavoratori**.
 4. *Table editor → staff*: sostituisci le email finte con le email vere di ciascuno
    (servono per collegare l'account al nome).
 
-### 3. Account
-1. *Authentication → Users → Add user → Create new user*: email + password per ciascuna persona,
-   con **Auto Confirm User** attivo. L'account si collega da solo al nome grazie all'email.
-2. *Authentication → Sign In / Providers*: disattiva **Allow new users to sign up**
-   (così nessun altro può registrarsi).
-3. Consegna a ciascuno email e password; potranno cambiarla più avanti (fase 2).
+### 3. Accesso delle persone (nessuna password da distribuire)
+1. *Authentication → Sign In / Providers → Email*: **Confirm email** attivo; lascia **Allow new users to sign up**
+   attivo (a chi non è nell'elenco lo impedisce il database). Password minima: 8 caratteri.
+   Se c'è l'opzione **Secure password change**, attivala.
+2. *Authentication → Email → SMTP Settings*: invio con un indirizzo dedicato (per esempio Gmail con
+   password per app: `smtp.gmail.com`, porta 465). Senza SMTP proprio Supabase invia solo ai membri del team.
+3. *Authentication → Email Templates*: in **Confirm signup**, **Magic Link**, **Reset Password** e
+   **Reauthentication** il testo deve contenere il codice `{{ .Token }}` (6 cifre).
+4. Il **primo accesso** lo fa ciascuno da solo: *Primo accesso o password dimenticata* → email → codice ricevuto →
+   sceglie la propria password. Funziona solo per le email scritte in *Gestione personale* (o nella tabella `staff`).
+5. Dentro l'app, *Cambia password* invia un nuovo codice via email. La password dimenticata si recupera con lo stesso
+   percorso del primo accesso.
+6. Marie aggiunge e toglie gli operatori da **Gestione personale** (con la data di fine servizio: i mesi passati restano
+   com'erano). Non può creare coordinatrici né cambiare ruoli: si fa solo dal pannello di Supabase.
 
 ### 4. Collega l'app al database
 1. *Project Settings → API*: copia **Project URL** e la chiave **anon / public**.

@@ -153,6 +153,7 @@ as $$
   select exists (
     select 1 from public.staff
      where user_id = auth.uid() and role = 'coordinator' and active
+       and (end_date is null or end_date >= current_date)
   );
 $$;
 
@@ -165,6 +166,7 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.staff where user_id = auth.uid() and active
+       and (end_date is null or end_date >= current_date)
   );
 $$;
 
@@ -410,6 +412,7 @@ begin
   if not exists (
     select 1 from public.staff
      where lower(email) = lower(new.email) and active and user_id is null
+       and (end_date is null or end_date >= current_date)
   ) then
     raise exception 'Questo indirizzo email non è tra quelli abilitati.' using errcode = '42501';
   end if;

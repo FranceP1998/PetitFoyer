@@ -4,7 +4,7 @@
 // striscia bianca tra un operatore e l'altro, sbarra della notte, domeniche gialle, ecc.
 
 import { giorniDelMese, meseDopo, nomeMese, pad, iso, righeLegenda } from './grid.js';
-import { descriviCella, notteFinisceDa } from './cella.js';
+import { descriviCella, notteFinisceDa, inServizio } from './cella.js';
 import { LARGHEZZE } from './pdf-metrics.js';
 
 const MM = 72 / 25.4;               // punti PDF per millimetro
@@ -120,7 +120,7 @@ export function nomeFilePdf(year, month) { return `Turni-${nomeMese(month)}-${ye
 export function creaPdf({ year, month, staff, shifts, events, servizio = '', note = '', logo = null, evidenzia = null }) {
   const nGiorni = giorniDelMese(year, month);
   const next = meseDopo(year, month);
-  const persone = [...staff].filter((p) => p.active !== false).sort((a, b) => a.sort_order - b.sort_order);
+  const persone = [...staff].filter((p) => inServizio(p, year, month)).sort((a, b) => a.sort_order - b.sort_order);
   const n = persone.length;
   const nCol = nGiorni + 1;                                    // giorni del mese + 1° del mese dopo
 

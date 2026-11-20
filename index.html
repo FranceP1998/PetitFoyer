@@ -24,14 +24,42 @@
 
   <!-- ACCESSO -->
   <section id="login" class="no-print" hidden>
-    <form id="login-form" class="card">
+    <div class="card">
       <h1>Turni Petit Foyer</h1>
-      <p class="muted">Accedi con l'email e la password che ti ha dato la coordinatrice.</p>
-      <label>Email<input id="login-email" type="email" autocomplete="username" required></label>
-      <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
+
+      <form id="f-accesso" class="passo">
+        <p class="muted">Accedi con la tua email e la tua password.</p>
+        <label>Email<input id="login-email" type="email" autocomplete="username" required></label>
+        <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
+        <button class="primario" type="submit">Accedi</button>
+        <button type="button" class="link" id="vai-primo">Primo accesso o password dimenticata</button>
+      </form>
+
+      <form id="f-email" class="passo" hidden>
+        <p class="muted">Scrivi la tua email di lavoro: ti mando un codice per confermare che sei tu. Funziona solo se Marie ti ha già aggiunto.</p>
+        <label>Email<input id="primo-email" type="email" autocomplete="username" required></label>
+        <button class="primario" type="submit">Invia il codice</button>
+        <button type="button" class="link" data-torna>Torna all'accesso</button>
+      </form>
+
+      <form id="f-codice" class="passo" hidden>
+        <p class="muted" id="codice-testo"></p>
+        <label>Codice ricevuto<input id="primo-codice" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}" maxlength="10" required></label>
+        <button class="primario" type="submit">Conferma</button>
+        <button type="button" class="link" id="codice-richiedi">Invia un nuovo codice</button>
+        <button type="button" class="link" data-torna>Annulla</button>
+      </form>
+
+      <form id="f-password" class="passo" hidden>
+        <p class="muted">Scegli la tua password personale (almeno 8 caratteri). La userai ogni volta che entri.</p>
+        <label>Nuova password<input id="pw1" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label>Ripeti la password<input id="pw2" type="password" autocomplete="new-password" minlength="8" required></label>
+        <button class="primario" type="submit">Salva e continua</button>
+      </form>
+
       <p id="login-err" class="err" role="alert" hidden></p>
-      <button class="primario" type="submit">Accedi</button>
-    </form>
+      <p id="login-ok" class="ok-msg" role="status" hidden></p>
+    </div>
   </section>
 
   <!-- APP -->
@@ -49,6 +77,8 @@
         <button id="btn-pubblica" class="solo-coord" hidden>Pubblica</button>
         <button id="btn-pdf" class="primario">Salva PDF</button>
         <span id="utente" class="muted"></span>
+        <button id="btn-personale" class="solo-coord" hidden>Gestione personale</button>
+        <button id="btn-password" class="link">Cambia password</button>
         <button id="btn-esci" class="link">Esci</button>
       </div>
     </header>
@@ -131,6 +161,60 @@
         <button type="button" id="ev-aggiungi" class="primario">Aggiungi</button>
       </fieldset>
       <div class="dlg-azioni"><span class="spazio"></span><button value="chiudi">Chiudi</button></div>
+    </form>
+  </dialog>
+
+  <!-- Cambio password -->
+  <dialog id="dlg-password" class="no-print">
+    <form id="f-cambio" method="dialog">
+      <h2>Cambia password</h2>
+      <p class="muted" id="cambio-testo">Per sicurezza ti mando un codice alla tua email.</p>
+      <button type="button" class="primario" id="cambio-invia">Invia il codice</button>
+      <div id="cambio-campi" class="campi" hidden>
+        <label>Codice ricevuto<input id="cambio-codice" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10"></label>
+        <label>Nuova password<input id="cambio-pw1" type="password" autocomplete="new-password" minlength="8"></label>
+        <label>Ripeti la password<input id="cambio-pw2" type="password" autocomplete="new-password" minlength="8"></label>
+      </div>
+      <p id="cambio-err" class="err" role="alert" hidden></p>
+      <div class="dlg-azioni">
+        <span class="spazio"></span>
+        <button type="button" id="cambio-chiudi">Chiudi</button>
+        <button type="button" class="primario" id="cambio-salva" hidden>Cambia password</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Gestione personale -->
+  <dialog id="dlg-personale" class="no-print largo">
+    <h2>Gestione personale</h2>
+    <p class="muted">Aggiungi un operatore con la sua email: potrà fare il primo accesso da solo. Per chi lascia il servizio imposta la data di fine: nei mesi passati resta nel foglio, da quella data non può più entrare.</p>
+    <ul id="personale-lista" class="personale-lista"></ul>
+    <div class="dlg-azioni">
+      <button type="button" class="primario" id="personale-nuovo">Aggiungi operatore</button>
+      <span class="spazio"></span>
+      <button type="button" id="personale-chiudi">Chiudi</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-persona" class="no-print">
+    <form id="f-persona" method="dialog">
+      <h2 id="persona-titolo"></h2>
+      <div class="campi">
+        <label>Nome (come compare nel foglio)<input id="pe-nome" type="text" required maxlength="40"></label>
+        <label>Email di lavoro<input id="pe-email" type="email" autocomplete="off"></label>
+        <p class="muted" id="pe-email-nota" hidden>Ha già fatto il primo accesso: l'email non si cambia da qui.</p>
+        <label>Primo giorno in servizio<input id="pe-inizio" type="date"></label>
+        <label>Ultimo giorno in servizio<input id="pe-fine" type="date"></label>
+        <label>Ore di contratto al mese<input id="pe-ore" type="number" min="0" max="300" step="0.5"></label>
+        <label class="check"><input type="checkbox" id="pe-fisso"> Turni fissi (come Andrea)</label>
+      </div>
+      <p id="persona-err" class="err" role="alert" hidden></p>
+      <div class="dlg-azioni">
+        <button type="button" class="link" id="pe-elimina" hidden>Elimina</button>
+        <span class="spazio"></span>
+        <button type="button" id="pe-annulla">Annulla</button>
+        <button type="button" class="primario" id="pe-salva">Salva</button>
+      </div>
     </form>
   </dialog>
 
