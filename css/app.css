@@ -117,9 +117,8 @@ sub.req { font-size: 9px; font-weight: 800; vertical-align: sub; line-height: 0;
 svg.spesa { width: 17px; height: 17px; vertical-align: middle; }
 
 /* sbarra della notte: dal pomeriggio del giorno N (in basso a sinistra) alla mattina di N+1 (in alto a destra) */
-td.notte-inizia, td.notte-fine {
-  background-image: linear-gradient(to top left, transparent calc(50% - .9px), #111 calc(50% - .9px), #111 calc(50% + .9px), transparent calc(50% + .9px));
-}
+#foglio { position: relative; }
+svg.notti { position: absolute; left: 0; top: 0; pointer-events: none; color: #111; z-index: 1; }
 td.notte-inizia sub.req { position: absolute; right: 3px; bottom: 2px; margin: 0; }
 
 /* modifica */
@@ -208,7 +207,7 @@ sub.musub { font-size: calc(var(--s) * .27); }
 .dl, .dr { position: absolute; top: calc(var(--s) * .05); font-size: calc(var(--s) * .26); font-weight: 800; line-height: 1; }
 .dl { left: calc(var(--s) * .07); }
 .dr { right: calc(var(--s) * .07); }
-td.notte-inizia .dr { top: calc(var(--s) * .4); }
+td.notte-fine .dr { top: calc(var(--s) * .4); }
 
 /* accesso a passi */
 .card .passo { display: grid; gap: 12px; }

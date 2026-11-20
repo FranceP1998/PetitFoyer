@@ -1,4 +1,4 @@
-import { descriviCella, notteFinisceDa, muDaIeri, scostamento, inServizio } from './cella.js';
+import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, scostamento, inServizio } from './cella.js';
 
 // Disegna il foglio turni come tabella HTML (stesso schema del foglio cartaceo):
 // due righe per persona (M sopra, P sotto), giorni in orizzontale, ultima colonna = 1° del mese dopo.
@@ -131,7 +131,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
     for (const c of cols) {
       const k = classiCol(c);
       const cella = (riga, contenuto, extraCls = '', rowspan = 1) => {
-        const attrs = p && editable ? ` data-staff="${p.id}" data-date="${c.data}"` : '';
+        const attrs = (p && editable ? ` data-staff="${p.id}" data-date="${c.data}"` : '') + (p ? ` data-p="${p.id}" data-d="${c.data}"` : '');
         return `<td class="${k} ${extraCls}"${rowspan > 1 ? ' rowspan="2"' : ''}${attrs}>${contenuto}</td>`;
       };
       if (!p) { rM += cella('m', ''); rP += cella('p', ''); continue; }
@@ -140,7 +140,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       // notte che finisce stamattina (iniziata il giorno prima)
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
-      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)));
+      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)));
       const protCls = editable && kinds.some(eProtetta) ? ' prot' : '';
 
       if (d.doppia) {
@@ -173,4 +173,34 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
   html += separatore() + blocchi.map((p) => riga(p)).join(separatore());   // stessa striscia bianca anche tra l'intestazione e il primo operatore
   html += '</tbody></table>';
   return html;
+}
+
+// Sbarra della notte: una sola linea dritta dall'angolo in basso a sinistra della casella in cui la notte inizia
+// all'angolo in alto a destra della casella in cui finisce. Si traccia sopra la tabella misurando le caselle vere,
+// così combacia al pixel anche con bordi di spessore diverso.
+export function tracciaNotti(contenitore) {
+  contenitore.querySelector('svg.notti')?.remove();
+  const tabella = contenitore.querySelector('table.foglio');
+  if (!tabella) return;
+  const base = contenitore.getBoundingClientRect();
+  const fini = new Map();
+  for (const td of tabella.querySelectorAll('td.notte-fine[data-p]')) fini.set(`${td.dataset.p}|${td.dataset.d}`, td);
+  const linee = [];
+  const pt = (x, y) => `${(x - base.left).toFixed(2)},${(y - base.top).toFixed(2)}`;
+  const usate = new Set();
+  for (const td of tabella.querySelectorAll('td.notte-inizia[data-p]')) {
+    const a = td.getBoundingClientRect();
+    const dopo = new Date(`${td.dataset.d}T12:00:00Z`); dopo.setUTCDate(dopo.getUTCDate() + 1);
+    const chiave = `${td.dataset.p}|${dopo.toISOString().slice(0, 10)}`;
+    const fine = fini.get(chiave);
+    if (fine) {
+      const b = fine.getBoundingClientRect();
+      linee.push(`${pt(a.left, a.bottom)} ${pt(b.right, b.top)}`);
+      usate.add(chiave);
+    } else linee.push(`${pt(a.left, a.bottom)} ${pt(a.right, a.top)}`);        // la notte finisce fuori dal foglio
+  }
+  for (const [chiave, td] of fini) if (!usate.has(chiave)) { const b = td.getBoundingClientRect(); linee.push(`${pt(b.left, b.bottom)} ${pt(b.right, b.top)}`); }   // la notte è iniziata nel mese prima
+  const w = tabella.offsetWidth, h = tabella.offsetHeight;
+  const svg = `<svg class="notti" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${linee.map((l) => `<polyline points="${l}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="butt"/>`).join('')}</svg>`;
+  contenitore.insertAdjacentHTML('beforeend', svg);
 }

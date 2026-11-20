@@ -4,7 +4,7 @@
 // striscia bianca tra un operatore e l'altro, sbarra della notte, domeniche gialle, ecc.
 
 import { giorniDelMese, meseDopo, nomeMese, pad, iso, righeLegenda } from './grid.js';
-import { descriviCella, notteFinisceDa, muDaIeri, inServizio } from './cella.js';
+import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, inServizio } from './cella.js';
 import { LARGHEZZE } from './pdf-metrics.js';
 
 const MM = 72 / 25.4;               // punti PDF per millimetro
@@ -254,7 +254,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
       const kinds = get(p.id, c.data);
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
-      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)));
+      const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)));
       const x0 = xs(j), cx = x0 + s / 2;
 
       if (d.doppia) {
@@ -288,7 +288,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
         if (l.s) pg.testo(l.s, x0 + 0.07 * s, yRiga + 0.32 * s, 'B', ptDel);
         if (l.e) pg.testo(l.e, x0 + s - 0.07 * s - lMM(l.e, 'B', ptDel), yRiga + (notte ? 0.6 : 0.32) * s, 'B', ptDel);
       };
-      lati(d.latiAlta, yM, false);
+      lati(d.latiAlta, yM, d.notteFinisce);
       lati(d.latiBassa, yP, d.notteInizia);
       if (d.notteIniziaRichiesta) {
         pg.testo('R', x0 + s - 0.12 * s - lMM('R', 'B', ptSub), yP + s - 0.14 * s, 'B', ptSub);

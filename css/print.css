@@ -24,9 +24,7 @@ table.foglio th.nome { font-size: 8.5pt; padding: 0 1.5mm; }
 .trattino { font-size: 14pt; }
 sub.req { font-size: 6pt; }
 svg.spesa { width: 4.2mm; height: 4.2mm; }
-td.notte-inizia, td.notte-fine {
-  background-image: linear-gradient(to top left, transparent calc(50% - .6px), #000 calc(50% - .6px), #000 calc(50% + .6px), transparent calc(50% + .6px));
-}
+svg.notti { color: #000; }
 td.notte-inizia sub.req { right: .8mm; bottom: .4mm; }
 
 .osservazioni { margin-top: 4mm; font-size: 9.5pt; }

@@ -511,3 +511,43 @@ grant select, insert, update, delete on public.months, public.shifts, public.eve
 grant select on public.unlocks to authenticated;
 grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date) on public.staff to authenticated;
 grant insert, update, delete on public.staff to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 14. Un giorno, un solo turno principale
+--     Una persona non può avere nello stesso giorno due tra: M, P, N, R, RR, F, FS, PERM, 10-18.
+--     Si aggiungono liberamente la copertura (COP), la copertura spesa, il recupero ore (RB)
+--     e la malattia (MU, che accompagna il turno saltato).
+-- ---------------------------------------------------------------------
+create or replace function public.shifts_esclusivi()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.kind in ('M','P','N','R','RR','F','FS','PERM','T1018') and exists (
+    select 1 from public.shifts s
+     where s.staff_id = new.staff_id and s.date = new.date
+       and s.id is distinct from new.id
+       and s.kind in ('M','P','N','R','RR','F','FS','PERM','T1018')
+  ) then
+    raise exception 'In un giorno si può avere un solo turno principale (M, P, N, riposo, ferie, permesso, 10-18).'
+      using errcode = '23514';
+  end if;
+  -- la malattia non va insieme a ferie, riposi e permessi
+  if (new.kind = 'MU' and exists (
+        select 1 from public.shifts s
+         where s.staff_id = new.staff_id and s.date = new.date and s.kind in ('R','RR','F','FS','PERM')))
+     or (new.kind in ('R','RR','F','FS','PERM') and exists (
+        select 1 from public.shifts s
+         where s.staff_id = new.staff_id and s.date = new.date and s.kind = 'MU' and s.id is distinct from new.id)) then
+    raise exception 'La malattia non si mette insieme a ferie, riposi o permessi.' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists shifts_esclusivi_trg on public.shifts;
+create trigger shifts_esclusivi_trg
+  before insert or update of kind, staff_id, date on public.shifts
+  for each row execute function public.shifts_esclusivi();

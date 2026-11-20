@@ -41,6 +41,14 @@ export const notteFinisceDa = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N
 // la notte iniziata ieri era una notte saltata per malattia? (stamattina compare "MU" col pedice della notte)
 export const muDaIeri = (kindsIeri) => kindsIeri.some((e) => e.kind === 'N') && kindsIeri.some((e) => e.kind === 'MU');
 
+// ore in più/meno alla FINE di una notte (iniziata ieri): si scrive stamattina, a destra, dove la notte finisce
+export function deltaFineNotte(kindsIeri) {
+  const n = kindsIeri.find((e) => e.kind === 'N');
+  if (!n || kindsIeri.some((e) => e.kind === 'MU')) return '';
+  const h = latiOrari(n).e;
+  return h ? etichettaScostamento(h) : '';
+}
+
 // '09:30:00' -> '9.30'    '10:00' -> '10'
 export function oraBreve(t) {
   if (!t) return '';
@@ -57,15 +65,20 @@ export function durataOre(inizio, fine) {
   return d / 60;
 }
 
-export function descriviCella(kinds, notteFinisce, muFine = false) {
+export function descriviCella(kinds, notteFinisce, muFine = false, fineDelta = '') {
   // in malattia il turno resta registrato ma non si disegna: al suo posto c'è "MU" con a pedice
   // il turno saltato (M, P oppure / per la notte), solo nello spazio che quel turno occupava
-  let muTurno = null;
+  let muTurno = null, muLibero = false;
   if (kinds.some((e) => e.kind === 'MU')) {
     muTurno = ['M', 'P', 'N'].find((k) => kinds.some((e) => e.kind === k)) || null;
     if (muTurno) kinds = kinds.filter((e) => !['M', 'P', 'N', 'MU'].includes(e.kind));
+    else if (!kinds.some((e) => ['T1018', 'COP'].includes(e.kind)) && kinds.some((e) => ['SPESA', 'RB'].includes(e.kind))) {
+      muLibero = true;                                             // malattia nel giorno di una copertura spesa o di un recupero: MU nella riga libera
+      kinds = kinds.filter((e) => e.kind !== 'MU');
+    }
+    // con 10-18 o con una copertura la casella resta unica: MU grande e gli orari cerchiati sotto
   }
-  const muOccupa = !!muTurno || muFine;
+  const muOccupa = !!muTurno || muFine || muLibero;
   const mP = (v) => [{ t: 'mu' }, { t: 'musub', v }];
   const has = (x) => kinds.find((e) => e.kind === x);
   const notteInizia = has('N') || null;
@@ -97,7 +110,8 @@ export function descriviCella(kinds, notteFinisce, muFine = false) {
   const lab = (h) => (h ? etichettaScostamento(h) : '');
   const lati = (e) => { const l = latiOrari(e); return { s: lab(l.s), e: lab(l.e) }; };
   const latiAlta = M ? lati(M) : { s: '', e: '' };
-  const latiBassa = P ? lati(P) : notteInizia ? lati(notteInizia) : { s: '', e: '' };
+  if (!M && notteFinisce && fineDelta) latiAlta.e = fineDelta;                 // fine notte: a destra, nella casella dove la notte finisce
+  const latiBassa = P ? lati(P) : notteInizia ? { s: lati(notteInizia).s, e: '' } : { s: '', e: '' };   // inizio notte: a sinistra, dove la notte inizia
   if (M) { alta.push({ t: 'lett', v: 'M' }); if (M.requested) alta.push({ t: 'pedice' }); }
   if (muTurno === 'M') alta.push(...mP('M'));
   if (muFine) alta.push(...mP('/'));
@@ -106,11 +120,12 @@ export function descriviCella(kinds, notteFinisce, muFine = false) {
   if (P) { bassa.push({ t: 'lett', v: 'P' }); if (P.requested) bassa.push({ t: 'pedice' }); }
   if (muTurno === 'P') bassa.push(...mP('P'));
   if (muTurno === 'N') bassa.push(...mP('/'));
+  if (muLibero) bassa.push({ t: 'mu' });
   if (full) bassa.push({ t: 'piccola', v: { F: 'F', FS: '–', PERM: 'P', R: 'R', RR: 'R', MU: 'MU' }[full.kind] });
 
   // le coperture/10-18 compatte finiscono nella prima riga libera
   let altaLibera = !M && !has('SPESA') && !has('RB') && !notteFinisce && muTurno !== 'M' && !muFine;
-  let bassaLibera = !P && !full && !notteInizia && muTurno !== 'P' && muTurno !== 'N';
+  let bassaLibera = !P && !full && !notteInizia && muTurno !== 'P' && muTurno !== 'N' && !muLibero;
   for (const o of ovali) {
     const pillola = { t: 'pillola', v: testoOvale(o) };
     if (altaLibera) { alta.push(pillola); altaLibera = false; }

@@ -1,6 +1,6 @@
 import { creaBackend } from './data.js';
 import { CONFIG } from './config.js';
-import { renderGrid, righeLegenda, nomeMese, pad, eProtetta } from './grid.js';
+import { renderGrid, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from './grid.js';
 import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento } from './cella.js';
@@ -24,6 +24,13 @@ const VOCI = [
   { kind: 'MU', etichetta: 'MU', nota: 'Malattia (mutua): tieni selezionato il suo turno' },
   { kind: 'RB', etichetta: 'RB', nota: 'Recupero ore' },
 ];
+
+// turni principali: in un giorno se ne può avere uno solo (la copertura, la spesa, il recupero ore e la malattia si aggiungono)
+const ESCLUSIVI = ['M', 'P', 'N', 'R', 'RR', 'F', 'FS', 'PERM', 'T1018'];
+// la malattia (MU) si mette su un turno, sul 10-18, su una copertura, sulla spesa o sul recupero ore:
+// non ha senso con ferie, riposi, riposi richiesti e permessi
+const PER_MALATTIA = ['M', 'P', 'N', 'T1018', 'COP', 'SPESA', 'RB'];
+const SENZA_MALATTIA = ['R', 'RR', 'F', 'FS', 'PERM'];
 
 const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [] };
 const valido = (s) => s.status === 'approved' && Date.now() - Date.parse(s.decided_at) < 24 * 3600 * 1000;
@@ -135,6 +142,12 @@ async function carica() {
   disegna();
 }
 
+// la linea della notte si traccia misurando le caselle: va rifatta se cambia la larghezza della pagina
+function ridisegnaNotti() { try { tracciaNotti($('foglio')); } catch { /* ignora */ } }
+let attesaNotti = 0;
+window.addEventListener('resize', () => { cancelAnimationFrame(attesaNotti); attesaNotti = requestAnimationFrame(ridisegnaNotti); });
+if (document.fonts?.ready) document.fonts.ready.then(ridisegnaNotti);
+
 function mostraMessaggio(t) { const p = $('messaggio'); p.textContent = t || ''; p.hidden = !t; }
 
 function disegna() {
@@ -168,6 +181,7 @@ function disegna() {
     evidenzia: isCoord() ? null : stato.utente.staffId,          // gli operatori vedono la propria riga riquadrata in blu
   });
   $('foglio').classList.toggle('modificabile', isCoord() && stato.modifica);
+  ridisegnaNotti();
 
   const oss = month.notes || '';
   $('osservazioni-testo').textContent = oss;
@@ -300,10 +314,29 @@ function apriCella(staffId, data) {
     for (const b of box.children) b.classList.toggle('on', cellaCorrente.scelti.has(b.dataset.kind));
     $('cella-cop').hidden = !cellaCorrente.scelti.has('COP');
   };
+  const aiutoBase = $('cella-aiuto').textContent;
   box.onclick = (e) => {
     const b = e.target.closest('.chip'); if (!b || b.disabled) return;
-    const k = b.dataset.kind;
-    cellaCorrente.scelti.has(k) ? cellaCorrente.scelti.delete(k) : cellaCorrente.scelti.add(k);
+    const k = b.dataset.kind, sc = cellaCorrente.scelti;
+    $('cella-aiuto').textContent = aiutoBase;
+    if (k === 'MU' && !sc.has('MU') && SENZA_MALATTIA.some((x) => sc.has(x))) {
+      $('cella-aiuto').textContent = 'La malattia non si mette insieme a ferie, riposi e permessi.'; return;
+    }
+    if (k === 'MU' && !sc.has('MU') && !PER_MALATTIA.some((x) => sc.has(x))) {
+      $('cella-aiuto').textContent = 'Per la malattia scegli prima che cosa avrebbe dovuto fare (turno, 10–18, copertura, spesa), poi tocca MU. Non si può con ferie, riposi e permessi.'; return;
+    }
+    if (sc.has(k)) sc.delete(k);
+    else {
+      if (ESCLUSIVI.includes(k)) {
+        // un giorno ha un solo turno principale: scegliere M, P, N, riposo, ferie... toglie quello scelto prima
+        const fissi = ESCLUSIVI.filter((x) => sc.has(x) && cellaCorrente.bloccata && cellaCorrente.protetti.has(x));
+        if (fissi.length) { $('cella-aiuto').textContent = 'Questa casella è protetta: non si può cambiare il suo turno senza il consenso.'; return; }
+        for (const x of ESCLUSIVI) sc.delete(x);
+        if (SENZA_MALATTIA.includes(k)) sc.delete('MU');             // ferie, riposi e permessi non vanno con la malattia
+      }
+      sc.add(k);
+    }
+    if (!PER_MALATTIA.some((x) => sc.has(x))) sc.delete('MU');
     aggiorna();
   };
   aggiorna();
@@ -347,13 +380,19 @@ $('form-cella').addEventListener('submit', async (ev) => {
     if (kind === 'COP') { v.start_time = $('cop-da').value; v.end_time = $('cop-a').value; }
     return v;
   });
+  if (ESCLUSIVI.filter((k) => c.scelti.has(k)).length > 1) {
+    alert('In un giorno si può avere un solo turno principale (M, P, N, riposo, ferie, permesso, 10–18). Tieni solo uno.'); return;
+  }
   const turniScelti = ['M', 'P', 'N'].filter((k) => c.scelti.has(k));
-  if (c.scelti.has('MU') && turniScelti.length !== 1) {
-    alert('Per la malattia lascia selezionato il turno che avrebbe dovuto fare (M, P oppure N).'); return;
+  if (c.scelti.has('MU') && !PER_MALATTIA.some((k) => c.scelti.has(k))) {
+    alert('Per la malattia lascia selezionato quello che avrebbe dovuto fare (turno, 10–18, copertura o spesa).'); return;
+  }
+  if (c.scelti.has('MU') && SENZA_MALATTIA.some((k) => c.scelti.has(k))) {
+    alert('La malattia non si mette insieme a ferie, riposi o permessi.'); return;
   }
   const nuovaMalattia = c.scelti.has('MU') && !c.esistenti.some((e) => e.kind === 'MU');
   const ok = await salvaCella(voci);
-  if (ok && nuovaMalattia) apriCopertura(c.staffId, c.data, turniScelti[0]);
+  if (ok && nuovaMalattia && turniScelti.length === 1) apriCopertura(c.staffId, c.data, turniScelti[0]);   // la copertura dei colleghi si propone per i turni M, P, N
 });
 async function salvaCella(voci) {
   const c = cellaCorrente;
