@@ -21,7 +21,6 @@ table.foglio { font-size: 8.5pt; page-break-inside: avoid; }
 table.foglio th.nome { font-size: 8.5pt; padding: 0 1.5mm; }
 .lett { font-size: 9pt; }
 .big { font-size: 20pt; }
-.big.perm { font-size: 13pt; }
 .trattino { font-size: 14pt; }
 sub.req { font-size: 6pt; }
 svg.spesa { width: 4.2mm; height: 4.2mm; }

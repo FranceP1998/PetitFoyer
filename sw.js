@@ -1,7 +1,7 @@
 // Service worker minimo: tiene in cache i file dell'app per aprirla più in fretta
 // e per mostrarla anche con rete debole. I dati (Supabase) non vengono mai messi in cache.
-const CACHE = 'turni-v1';
-const FILE = ['./', 'index.html', 'css/app.css', 'css/print.css', 'js/app.js', 'js/grid.js', 'js/data.js',
+const CACHE = 'turni-v3';
+const FILE = ['./', 'index.html', 'css/app.css', 'css/print.css', 'js/app.js', 'js/grid.js', 'js/data.js', 'js/pdf.js', 'js/pdf-metrics.js',
   'js/config.js', 'js/demo-data.js', 'manifest.webmanifest', 'assets/icon.svg'];
 
 self.addEventListener('install', (e) => {

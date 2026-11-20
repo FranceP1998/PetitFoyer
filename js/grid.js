@@ -40,16 +40,23 @@ export function righeLegenda(events, y, m) {
   const ora = (t) => (t ? t.slice(0, 5).replace(':', '.') : '');
   const gg = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
   const delMese = events.filter((e) => e.date.startsWith(`${y}-${pad(m)}-`));
+  // ogni riga ha l'html per lo schermo e le parti (b = grassetto, t = testo) per il PDF
   for (const e of delMese.filter((e) => e.kind === 'collettivo')) {
-    out.push({ cls: 'collettivo', html: `<b>COLLETTIVO:</b> ${gg(e.date)}${e.start_time ? ' h ' + ora(e.start_time) : ''}${e.label ? ' ' + esc(e.label) : ''}` });
+    const t = ` ${gg(e.date)}${e.start_time ? ' h ' + ora(e.start_time) : ''}${e.label ? ' ' + e.label : ''}`;
+    out.push({ cls: 'collettivo', b: 'COLLETTIVO:', t, html: `<b>COLLETTIVO:</b>${esc(t)}` });
   }
   const spese = delMese.filter((e) => e.kind === 'spesa').sort((a, b) => a.date.localeCompare(b.date));
   if (spese.length) {
-    const orario = spese[0].start_time && spese[0].end_time ? ` → ${ora(spese[0].start_time)}–${ora(spese[0].end_time)}` : '';
-    out.push({ cls: 'spesa', html: `${ICONA_SPESA} <b>COPERTURA SPESA:</b> ${spese.map((e) => gg(e.date)).join(' – ')}${orario}` });
+    const orario = spese[0].start_time && spese[0].end_time ? ` ${ora(spese[0].start_time)}–${ora(spese[0].end_time)}` : '';
+    const giorni = spese.map((e) => gg(e.date)).join(' – ');
+    out.push({ cls: 'spesa', icona: true, b: 'COPERTURA SPESA:', t: ` ${giorni}${orario ? ' ore' + orario : ''}`,
+      html: `${ICONA_SPESA} <b>COPERTURA SPESA:</b> ${giorni}${orario ? ' →' + orario : ''}` });
   }
-  for (const e of delMese.filter((e) => e.kind === 'altro')) out.push({ cls: 'altro', html: `${gg(e.date)} ${esc(e.label)}` });
-  out.push({ cls: 'rbleg', html: '<b>RB</b> – recupero ore' });
+  for (const e of delMese.filter((e) => e.kind === 'altro')) {
+    const t = `${gg(e.date)} ${e.label}`;
+    out.push({ cls: 'altro', b: '', t, html: esc(t) });
+  }
+  out.push({ cls: 'rbleg', b: 'RB', t: ' – recupero ore', html: '<b>RB</b> – recupero ore' });
   return out;
 }
 
@@ -122,7 +129,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
         const txt = {
           F: '<span class="big">F</span>',
           FS: '<span class="trattino">–</span>',
-          PERM: '<span class="big perm" title="Permesso">P</span>',
+          PERM: `<span class="big">P</span>${SUB_R}`,   // permesso: P grande con R a pedice (è sempre una richiesta)
           R: '<span class="big">R</span>',
           RR: `<span class="big">R</span>${SUB_R}`,
         }[full.kind];
@@ -155,7 +162,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
     return r + '</tr>';
   };
   const blocchi = [...ordinati, ...Array(righeVuote).fill(null)];
-  html += blocchi.map((p) => riga(p)).join(separatore());
+  html += separatore() + blocchi.map((p) => riga(p)).join(separatore());   // stessa striscia bianca anche tra l'intestazione e il primo operatore
   html += '</tbody></table>';
   return html;
 }

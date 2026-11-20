@@ -354,3 +354,13 @@ create policy unlocks_select on public.unlocks
     or staff_id in (select s.id from public.staff s where s.user_id = auth.uid())
   );
 -- nessuna policy di scrittura: si scrive solo tramite le tre funzioni qui sopra
+
+-- ---------------------------------------------------------------------
+-- 10. Dati riservati della tabella staff
+--     Gli operatori vedono nomi e ruoli (servono per disegnare il foglio) ma NON
+--     le email dei colleghi né le ore di contratto. Queste colonne le legge solo
+--     chi usa la dashboard di Supabase (Table editor); in fase 2 la coordinatrice
+--     le leggerà tramite una funzione dedicata.
+-- ---------------------------------------------------------------------
+revoke select on public.staff from anon, authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id) on public.staff to authenticated;

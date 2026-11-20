@@ -1,6 +1,7 @@
 import { creaBackend } from './data.js';
 import { CONFIG } from './config.js';
 import { renderGrid, righeLegenda, nomeMese, pad, eProtetta } from './grid.js';
+import { creaPdf, nomeFilePdf } from './pdf.js';
 
 const $ = (id) => document.getElementById(id);
 const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
@@ -13,15 +14,15 @@ const VOCI = [
   { kind: 'R', etichetta: 'R', nota: 'Riposo obbligatorio' },
   { kind: 'RR', etichetta: 'R<sub>R</sub>', nota: 'Riposo richiesto' },
   { kind: 'F', etichetta: 'F', nota: 'Ferie' },
-  { kind: 'FS', etichetta: '–', nota: 'Domenica in ferie' },
-  { kind: 'PERM', etichetta: 'P', nota: 'Permesso' },
+  { kind: 'FS', etichetta: '–', nota: 'Domenica dentro ferie o permessi' },
+  { kind: 'PERM', etichetta: 'P<sub>R</sub>', nota: 'Permesso' },
   { kind: 'SPESA', etichetta: '⊛', nota: 'Copertura spesa' },
   { kind: 'RB', etichetta: 'RB', nota: 'Recupero ore' },
 ];
 
 const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [] };
 const valido = (s) => s.status === 'approved' && Date.now() - Date.parse(s.decided_at) < 24 * 3600 * 1000;
-const NOMI_PROTETTI = { F: 'ferie', FS: 'domenica in ferie', PERM: 'permesso', RR: 'riposo richiesto', M: 'turno richiesto', P: 'turno richiesto', N: 'turno richiesto' };
+const NOMI_PROTETTI = { F: 'ferie', FS: 'domenica dentro ferie o permessi', PERM: 'permesso', RR: 'riposo richiesto', M: 'turno richiesto', P: 'turno richiesto', N: 'turno richiesto' };
 const elencoProtetti = (kinds) => [...new Set(String(kinds || '').split(',').filter(Boolean).map((k) => NOMI_PROTETTI[k] || k))].join(', ');
 const dataEstesa = (data) => { const d = new Date(data + 'T00:00:00'); return `${GIORNI[d.getDay()]} ${d.getDate()} ${nomeMese(d.getMonth() + 1).toLowerCase()}`; };
 const isCoord = () => stato.utente?.role === 'coordinator';
@@ -104,6 +105,7 @@ function disegna() {
     ? 'Il piano di questo mese non è ancora stato pubblicato.'
     : (isCoord() && !pubblicato ? 'Bozza: gli operatori non la vedono finché non la pubblichi.' : ''));
   $('pagina').hidden = nascosto;
+  $('btn-pdf').hidden = nascosto;
   disegnaConsensi();
   if (nascosto) return;
 
@@ -132,7 +134,43 @@ function vaiMese(delta) {
 }
 $('prev').onclick = () => vaiMese(-1);
 $('next').onclick = () => vaiMese(1);
-$('btn-stampa').onclick = () => window.print();
+// Logo per il PDF: si legge assets/logo.png (se c'è) e si converte in pixel RGB su fondo bianco
+let logoPdf = null;
+async function leggiLogo() {
+  try {
+    const r = await fetch('assets/logo.png');
+    if (!r.ok) return null;
+    const bmp = await createImageBitmap(await r.blob());
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const rgb = new Uint8Array(c.width * c.height * 3);
+    for (let i = 0, j = 0; i < d.length; i += 4) { rgb[j++] = d[i]; rgb[j++] = d[i + 1]; rgb[j++] = d[i + 2]; }
+    return { w: c.width, h: c.height, rgb };
+  } catch { return null; }
+}
+
+// PDF del foglio (A4 orizzontale): si salva sul dispositivo e poi si stampa da lì.
+// Su telefono si apre il menu di condivisione (Salva su File, Stampa, WhatsApp...), sul computer si scarica.
+$('btn-pdf').onclick = async () => {
+  try {
+    const { month, staff, shifts, events } = stato.dati;
+    if (!logoPdf) logoPdf = leggiLogo();
+    const logo = await logoPdf;
+    const bytes = creaPdf({ year: stato.y, month: stato.m, staff, shifts, events, servizio: CONFIG.SERVIZIO, note: month.notes || '', logo });
+    const nome = nomeFilePdf(stato.y, stato.m);
+    const file = new File([bytes], nome, { type: 'application/pdf' });
+    const touch = window.matchMedia('(pointer: coarse)').matches;
+    if (touch && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: nome }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url; a.download = nome;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { alert('Non sono riuscito a creare il PDF: ' + e.message); }
+};
 $('btn-esci').onclick = async () => { await stato.be.esci(); stato.utente = null; mostraAccesso(); };
 $('btn-modifica').onclick = () => { stato.modifica = !stato.modifica; disegna(); };
 $('btn-pubblica').onclick = async () => {

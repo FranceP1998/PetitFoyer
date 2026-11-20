@@ -111,7 +111,6 @@ table.foglio td { position: relative; }
 .lett.piccola { opacity: .85; }
 sub.req { font-size: 9px; font-weight: 800; vertical-align: sub; line-height: 0; margin-left: 1px; }
 .big { font-size: 31px; font-weight: 300; line-height: 1; letter-spacing: 0; }
-.big.perm { font-weight: 500; font-size: 28px; border: 1.5px solid currentColor; border-radius: 6px; padding: 0 6px; font-size: 22px; font-weight: 600; } /* aspetto del permesso: da decidere */
 .trattino { font-size: 20px; }
 .rb { font-size: 10px; font-weight: 700; }
 svg.spesa { width: 17px; height: 17px; vertical-align: middle; }

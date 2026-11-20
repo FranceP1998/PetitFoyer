@@ -1,6 +1,6 @@
 # Turni Petit Foyer — fase 1
 
-Foglio turni digitale (piano mensile con la grafica del foglio cartaceo, stampa A4 orizzontale,
+Foglio turni digitale (piano mensile con la grafica del foglio cartaceo, PDF A4 orizzontale,
 accesso per coordinatrice e operatori). Costo: zero (GitHub Pages + Supabase gratuito).
 
 **Prima di configurare qualsiasi cosa puoi provarla:** apri `index.html` da un server web (o dal
@@ -11,7 +11,8 @@ con un piano di esempio di novembre 2026 (non è il piano vero) e senza account.
 
 - Piano mensile: due righe per persona (M sopra, P sotto), sbarra della notte, R, R con R piccola a pedice
   (richiesto), F, trattino, permesso, ⊛ copertura spesa, RB, ultima colonna = 1° del mese dopo.
-- Stampa (pulsante *Stampa*): A4 orizzontale, una pagina, colori chiari.
+- **Salva PDF** (pulsante in alto): crea un PDF A4 orizzontale, una pagina, centrato e con colori chiari, da salvare
+  sul computer o sul telefono e stampare da lì (su telefono si apre il menu *Salva su File / Stampa / Condividi*).
 - Coordinatrice: *Modifica* (tocca una casella), *Eventi del mese* (collettivo, spesa, altro),
   osservazioni, *Pubblica* / *Riporta in bozza*.
 - Operatori: vedono solo i mesi pubblicati, sola lettura, la loro riga è evidenziata.
@@ -76,7 +77,7 @@ Apri il sito → accedi come Marie → vai al mese → *Modifica* → tocca le c
 ```
 index.html            pagina unica
 css/app.css           aspetto a schermo e colori (variabili in :root)
-css/print.css         stampa A4 orizzontale
+css/print.css         stampa diretta dal browser (di riserva: si consiglia Salva PDF)
 js/grid.js            disegna il foglio (tabella)
 js/app.js             schermate, modifica, eventi, pubblicazione
 js/data.js            accesso ai dati: demo e Supabase
@@ -85,9 +86,9 @@ js/config.js          URL e chiave Supabase
 supabase/schema.sql   tabelle, ruoli, regole di accesso, ping
 supabase/seed.sql     le 7 persone
 .github/workflows/    ping anti-pausa
-assets/logo.png       (facoltativo) logo da mettere in testa al foglio e alla stampa
+assets/logo.png       (facoltativo) logo da mettere in testa al foglio a schermo
 ```
 
 ## Personalizzare la grafica
 Colori e spessori sono in `:root` di `css/app.css`. Per mettere il logo della Libellula salva
-un file `assets/logo.png`: compare in testa al foglio e nella stampa.
+un file `assets/logo.png`: compare in testa al foglio a schermo (nel PDF per ora c'è solo il nome della cooperativa).
