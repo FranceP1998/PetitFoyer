@@ -75,6 +75,7 @@
         <button id="btn-modifica" class="solo-coord" hidden>Modifica</button>
         <button id="btn-eventi" class="solo-coord" hidden>Eventi del mese</button>
         <button id="btn-pubblica" class="solo-coord" hidden>Pubblica</button>
+        <button id="btn-richieste">Richieste</button>
         <button id="btn-malattia" class="solo-op" hidden>Comunica malattia</button>
         <button id="btn-pdf" class="primario">Salva PDF</button>
         <span id="utente" class="muted"></span>
@@ -132,6 +133,29 @@
         <button type="submit" class="primario" id="cella-salva" value="ok">Salva</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Richieste di riposo o di turno -->
+  <dialog id="dlg-richieste" class="no-print largo">
+    <h2 id="ric-titolo">Richieste</h2>
+    <p class="muted" id="ric-testo"></p>
+    <div id="ric-coord" hidden>
+      <p id="ric-stato"></p>
+      <button type="button" id="ric-apri"></button>
+    </div>
+    <div id="ric-op" hidden>
+      <label class="ric-mese">Mese <select id="ric-mese"></select></label>
+      <div class="campi">
+        <label>Giorno<input id="ric-data" type="date"></label>
+        <label>Che cosa chiedi
+          <select id="ric-tipo"><option value="RR">Riposo</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select>
+        </label>
+      </div>
+      <button type="button" class="primario" id="ric-invia">Invia la richiesta</button>
+    </div>
+    <p id="ric-err" class="err" role="alert" hidden></p>
+    <ul id="ric-lista" class="personale-lista ric-lista"></ul>
+    <div class="dlg-azioni"><span class="spazio"></span><button type="button" id="ric-chiudi">Chiudi</button></div>
   </dialog>
 
   <!-- Comunica malattia (operatore) -->

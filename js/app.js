@@ -32,7 +32,7 @@ const ESCLUSIVI = ['M', 'P', 'N', 'R', 'RR', 'F', 'FS', 'PERM', 'T1018'];
 const PER_MALATTIA = ['M', 'P', 'N', 'T1018', 'COP', 'SPESA', 'RB'];
 const SENZA_MALATTIA = ['R', 'RR', 'F', 'FS', 'PERM'];
 
-const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [], notifiche: [], malattie: [] };
+const stato = { be: null, utente: null, y: 0, m: 0, dati: null, modifica: false, sblocchi: [], notifiche: [], malattie: [], richieste: [] };
 const valido = (s) => s.status === 'approved' && Date.now() - Date.parse(s.decided_at) < 24 * 3600 * 1000;
 const NOMI_PROTETTI = { F: 'ferie', FS: 'domenica dentro ferie o permessi', PERM: 'permesso', RR: 'riposo richiesto', M: 'turno richiesto', P: 'turno richiesto', N: 'turno richiesto' };
 const elencoProtetti = (kinds) => [...new Set(String(kinds || '').split(',').filter(Boolean).map((k) => NOMI_PROTETTI[k] || k))].join(', ');
@@ -136,12 +136,14 @@ async function mostra() {
 async function carica() {
   $('titolo-mese').textContent = `${nomeMese(stato.m)} ${stato.y}`;
   try { history.replaceState(null, '', `#${stato.y}-${stato.m}`); } catch { /* ignora */ }
+  try { await stato.be.elaboraScadenze(); } catch { /* ignora */ }   // richieste non esaminate dopo il 20: valgono come accettate
   try {
     stato.dati = await stato.be.caricaMese(stato.y, stato.m);
   } catch (e) { mostraMessaggio('Non riesco a caricare i dati: ' + e.message); return; }
   try { stato.sblocchi = await stato.be.elencaSblocchi(); } catch { stato.sblocchi = []; }
   try { stato.notifiche = await stato.be.elencaNotifiche(); } catch { stato.notifiche = []; }
   try { stato.malattie = isCoord() ? await stato.be.elencaMalattie() : []; } catch { stato.malattie = []; }
+  try { stato.richieste = await stato.be.elencaRichieste(stato.y, stato.m); } catch { stato.richieste = []; }
   disegna();
 }
 
@@ -152,6 +154,13 @@ window.addEventListener('resize', () => { cancelAnimationFrame(attesaNotti); att
 if (document.fonts?.ready) document.fonts.ready.then(ridisegnaNotti);
 
 function mostraMessaggio(t) { const p = $('messaggio'); p.textContent = t || ''; p.hidden = !t; }
+
+// le richieste ancora senza risposta compaiono sul foglio (tratteggiate; gialle se critiche)
+function richiestePerFoglio() {
+  return stato.richieste.filter((r) => r.status === 'pending').map((r) => ({
+    staff_id: r.staff_id, date: r.date, kind: r.kind, requested: r.kind !== 'RR', pending: true, critica: (r.avvisi || []).length > 0,
+  }));
+}
 
 function disegna() {
   const { month, staff, shifts, events } = stato.dati;
@@ -167,21 +176,21 @@ function disegna() {
   $('f-servizio').textContent = CONFIG.SERVIZIO;
   $('f-mese').textContent = `${nomeMese(stato.m).toUpperCase()} ${stato.y}`;
 
-  // gli operatori non vedono i mesi non pubblicati
-  const nascosto = !isCoord() && !pubblicato;
-  mostraMessaggio(nascosto
-    ? 'Il piano di questo mese non è ancora stato pubblicato.'
-    : (isCoord() && !pubblicato ? 'Bozza: gli operatori non la vedono finché non la pubblichi.' : ''));
-  $('pagina').hidden = nascosto;
-  $('btn-pdf').hidden = nascosto;
+  // finché il mese non è pubblicato gli operatori vedono solo ferie, permessi e richieste (di tutti)
+  mostraMessaggio(!isCoord() && !pubblicato
+    ? 'Piano in preparazione: per ora vedi solo ferie, permessi e richieste di tutti. I turni compaiono quando Marie pubblica.'
+    : (isCoord() && !pubblicato ? 'Bozza: gli operatori ne vedono solo ferie, permessi e richieste, finché non la pubblichi.' : ''));
+  $('pagina').hidden = false;
+  $('btn-pdf').hidden = !isCoord() && !pubblicato;
+  const inAttesa = isCoord() ? stato.richieste.filter((r) => r.status === 'pending').length : 0;
+  $('btn-richieste').textContent = inAttesa ? `Richieste (${inAttesa})` : 'Richieste';
   disegnaConsensi();
   disegnaNotifiche();
   disegnaMalattie();
-  if (nascosto) return;
 
   $('legenda').innerHTML = righeLegenda(events, stato.y, stato.m, shifts).map((r) => `<li class="${r.cls}">${r.html}</li>`).join('');
   $('foglio').innerHTML = renderGrid({
-    year: stato.y, month: stato.m, staff, shifts, events,
+    year: stato.y, month: stato.m, staff, shifts: [...shifts, ...richiestePerFoglio()], events,
     editable: isCoord() && stato.modifica,
     evidenzia: isCoord() ? null : stato.utente.staffId,          // gli operatori vedono la propria riga riquadrata in blu
   });
@@ -296,6 +305,123 @@ $('notifiche').addEventListener('click', async (ev) => {
   const b = ev.target.closest('button[data-letta]'); if (!b) return;
   try { await stato.be.segnaNotificaLetta(+b.dataset.letta); } catch (e) { alert(messaggio(e)); }
   await carica();
+});
+
+// ------------------------------------------------------------ richieste di riposo o di turno
+const TIPO_RICHIESTA = { RR: 'Riposo', M: 'Mattina', P: 'Pomeriggio', N: 'Notte' };
+const STATO_RICHIESTA = { pending: 'In attesa', accepted: 'Accettata', rejected: 'Rifiutata' };
+const MAX_RICHIESTE = 3;
+let ricMeseOp = null;                                  // mese scelto dall'operatore: { year, month, scadenza }
+function ricErrore(t) { $('ric-err').textContent = t || ''; $('ric-err').hidden = !t; }
+const ricMese = () => (isCoord() ? { year: stato.y, month: stato.m } : (ricMeseOp || { year: stato.y, month: stato.m }));
+
+async function apriRichieste() {
+  ricErrore('');
+  $('ric-coord').hidden = !isCoord(); $('ric-op').hidden = isCoord();
+  if (isCoord()) {
+    $('ric-titolo').textContent = `Richieste di ${nomeMese(stato.m).toLowerCase()} ${stato.y}`;
+    $('ric-testo').textContent = 'Accetta o rifiuta man mano che arrivano. Le richieste in giallo non rispettano le regole: per accettarle o rifiutarle scrivi la motivazione. Dopo il 20 del mese prima quelle non esaminate valgono come accettate.';
+  } else {
+    $('ric-titolo').textContent = 'Richieste di riposo o di turno';
+    let mesi = [];
+    try { mesi = await stato.be.mesiRichieste(); } catch (e) { ricErrore(messaggio(e)); }
+    $('ric-mese').innerHTML = mesi.map((x, i) => `<option value="${i}">${nomeMese(x.month)} ${x.year}</option>`).join('');
+    $('ric-mese').onchange = () => { ricMeseOp = mesi[+$('ric-mese').value]; disegnaRichieste(); };
+    ricMeseOp = mesi[0] || null;
+    $('ric-op').hidden = !mesi.length;
+    $('ric-testo').textContent = mesi.length
+      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese. Ferie e permessi sono un'altra cosa. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Le richieste non esaminate entro il 20 valgono come accettate. Qui vedi anche quelle dei colleghi.`
+      : 'Al momento le richieste non sono aperte: Marie le apre prima di ogni mese e ti avvisa.';
+  }
+  await disegnaRichieste();
+  if (!$('dlg-richieste').open) $('dlg-richieste').showModal();
+}
+
+async function disegnaRichieste() {
+  const mese = ricMese();
+  const lista = $('ric-lista');
+  if (!mese) { lista.innerHTML = ''; $('ric-apri').hidden = true; return; }
+  let righe = [];
+  try { righe = await stato.be.elencaRichieste(mese.year, mese.month); } catch (e) { ricErrore(messaggio(e)); }
+  if (mese.year === stato.y && mese.month === stato.m) stato.richieste = righe;
+  if (isCoord()) {
+    const aperto = !!stato.dati?.month?.requests_open;
+    $('ric-stato').innerHTML = aperto
+      ? `Le richieste sono <b>aperte</b>: gli operatori possono inserirle entro il 20 del mese prima.`
+      : `Le richieste sono <b>chiuse</b>: gli operatori non possono inserirne.`;
+    $('ric-apri').hidden = false;
+    $('ric-apri').textContent = aperto ? 'Chiudi le richieste' : 'Apri le richieste e avvisa gli operatori';
+    $('ric-apri').className = aperto ? '' : 'primario';
+  } else {
+    const d0 = `${mese.year}-${pad(mese.month)}-01`, d1 = `${mese.year}-${pad(mese.month)}-${pad(new Date(mese.year, mese.month, 0).getDate())}`;
+    $('ric-data').min = d0; $('ric-data').max = d1;
+    if (!$('ric-data').value || $('ric-data').value < d0 || $('ric-data').value > d1) $('ric-data').value = d0;
+  }
+  const mie = righe.filter((r) => r.staff_id === stato.utente.staffId && ['pending', 'accepted'].includes(r.status)).length;
+  const ordine = { pending: 0, accepted: 1, rejected: 2 };
+  righe = [...righe].sort((a, b) => ordine[a.status] - ordine[b.status] || a.date.localeCompare(b.date));
+  const intest = isCoord() ? '' : `<li class="muted"><span>Hai usato ${mie} richieste su ${MAX_RICHIESTE}. Qui sotto vedi quelle di tutti.</span></li>`;
+  lista.innerHTML = intest + (righe.length ? righe.map((r) => {
+    const mia = r.staff_id === stato.utente.staffId;
+    const avvisi = r.avvisi || [];
+    const chi = `<b>${esc(nomePersona(r.staff_id))}</b> · `;
+    const critica = r.status === 'pending' && avvisi.length;
+    let azioni = '';
+    if (r.status === 'pending') {
+      azioni = isCoord()
+        ? `<span class="azioni"><button type="button" class="primario" data-ric-ok="${r.id}">Accetta</button><button type="button" data-ric-no="${r.id}">Rifiuta</button></span>`
+        : (mia ? `<span class="azioni"><button type="button" class="link" data-ric-annulla="${r.id}">Annulla</button></span>` : '');
+    }
+    const motivoIn = r.status === 'pending' && isCoord()
+      ? `<input type="text" class="ric-motivo" placeholder="${avvisi.length ? 'Motivazione (obbligatoria: richiesta critica)' : 'Motivazione (obbligatoria se rifiuti)'}" data-motivo-di="${r.id}">` : '';
+    const nota = (avvisi.length && r.status !== 'rejected' ? `<span class="avvisi">⚠ ${avvisi.map(esc).join(' ')}</span>` : '')
+      + (r.motivo ? `<span class="motivo">Marie: ${esc(r.motivo)}</span>` : '');
+    return `<li class="${critica ? 'critica ' : ''}col"><span class="chi">${chi}${dataEstesa(r.date)} · ${TIPO_RICHIESTA[r.kind]}${nota}</span><span class="stato ${r.status === 'accepted' ? 'accettata' : r.status === 'rejected' ? 'rifiutata' : ''}">${STATO_RICHIESTA[r.status]}</span>${azioni}${motivoIn}</li>`;
+  }).join('') : '<li class="muted"><span>Nessuna richiesta per questo mese.</span></li>');
+  $('btn-richieste').textContent = isCoord() && stato.richieste.some((r) => r.status === 'pending') ? `Richieste (${stato.richieste.filter((r) => r.status === 'pending').length})` : 'Richieste';
+}
+
+$('btn-richieste').onclick = apriRichieste;
+$('ric-chiudi').onclick = async () => { $('dlg-richieste').close(); await carica(); };
+$('ric-invia').onclick = async () => {
+  ricErrore('');
+  const data = $('ric-data').value;
+  if (!data) return ricErrore('Scegli il giorno.');
+  const tipo = $('ric-tipo').value;
+  try {
+    try { await stato.be.inviaRichiesta(data, tipo, false); }
+    catch (e) {
+      const m = messaggio(e);
+      if (!m.startsWith('[avviso]')) throw e;
+      // qualche regola non è rispettata: l'operatore può comunque chiedere, ma Marie la vedrà in giallo
+      if (!confirm(`${m.replace('[avviso] ', '')}\n\nPuoi inviare comunque la richiesta: Marie la vedrà segnata come critica e deciderà lei.\n\nInviarla comunque?`)) return;
+      await stato.be.inviaRichiesta(data, tipo, true);
+    }
+  } catch (e) { return ricErrore(messaggio(e)); }
+  await carica(); await disegnaRichieste();
+};
+$('ric-apri').onclick = async () => {
+  ricErrore('');
+  try {
+    await stato.be.impostaRichieste(stato.y, stato.m, !stato.dati.month.requests_open);
+    stato.dati = await stato.be.caricaMese(stato.y, stato.m);
+  } catch (e) { return ricErrore(messaggio(e)); }
+  await disegnaRichieste();
+};
+$('ric-lista').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  ricErrore('');
+  try {
+    if (b.dataset.ricAnnulla) { await stato.be.annullaRichiesta(+b.dataset.ricAnnulla); stato.richieste = await stato.be.elencaRichieste(stato.y, stato.m); disegna(); }
+    else if (b.dataset.ricOk || b.dataset.ricNo) {
+      const id = +(b.dataset.ricOk || b.dataset.ricNo), accetta = !!b.dataset.ricOk;
+      const motivo = b.closest('li').querySelector('.ric-motivo')?.value || '';
+      await stato.be.rispondiRichiesta(id, accetta, motivo);
+      stato.dati = await stato.be.caricaMese(stato.y, stato.m);
+      stato.richieste = await stato.be.elencaRichieste(stato.y, stato.m); disegna();
+    }
+  } catch (e) { return ricErrore(messaggio(e)); }
+  await disegnaRichieste();
 });
 
 // ------------------------------------------------------------ malattia: pannello della coordinatrice

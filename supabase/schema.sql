@@ -791,3 +791,307 @@ create policy sick_reports_select on public.sick_reports
   using (public.is_coordinator() or staff_id in (select s.id from public.staff s where s.user_id = auth.uid()));
 revoke all on public.notifications, public.sick_reports from anon, authenticated;
 grant select on public.notifications, public.sick_reports to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 16. Richieste di riposo o di turno
+--     Marie apre le richieste di un mese; ogni operatore può inviarne al massimo 3 (riposi e turni insieme)
+--     entro il 20 del mese prima.
+--     - Regole che BLOCCANO la richiesta: giorno già occupato, turno già chiesto da un altro collega
+--       (vince chi chiede prima), troppi riposi nello stesso giorno (2; d'estate 1), limite di 3 richieste.
+--     - Regole che AVVISANO: mattina dopo un pomeriggio, più di due notti di fila, più di 4 giorni di
+--       lavoro di fila, qualsiasi cosa il giorno dopo una notte, secondo riposo nello stesso giorno,
+--       due riposi di fila in estate. L'operatore può inviare comunque: la richiesta arriva a Marie
+--       segnata come "critica" (in giallo) e lei decide, scrivendo la motivazione.
+--     - Dopo il 20 le richieste che Marie non ha esaminato valgono come ACCETTATE.
+--     - Tutti gli operatori vedono tutte le richieste, e anche ferie, permessi, riposi e turni richiesti
+--       del mese in preparazione (il resto del piano resta nascosto finché Marie non pubblica).
+-- ---------------------------------------------------------------------
+alter table public.months add column if not exists requests_open boolean not null default false;
+
+create table if not exists public.requests (
+  id         bigint generated always as identity primary key,
+  staff_id   bigint not null references public.staff(id) on delete cascade,
+  date       date   not null,
+  kind       text   not null check (kind in ('RR','M','P','N')),
+  status     text   not null default 'pending' check (status in ('pending','accepted','rejected','cancelled')),
+  created_at timestamptz not null default now(),         -- serve per la precedenza (chi chiede prima)
+  decided_at timestamptz
+);
+alter table public.requests add column if not exists avvisi text[] not null default '{}';   -- regole non rispettate (richiesta critica)
+alter table public.requests add column if not exists motivo text;                           -- motivazione di Marie
+create index if not exists requests_date_idx on public.requests (date);
+create unique index if not exists requests_attiva_uq on public.requests (staff_id, date) where status in ('pending','accepted');
+
+-- oggi, all'ora italiana
+create or replace function public.oggi() returns date language sql stable as $$ select (now() at time zone 'Europe/Rome')::date; $$;
+
+-- ultimo giorno per inserire le richieste di un mese: il 20 del mese prima
+create or replace function public.richieste_scadenza(p_year int, p_month int) returns date
+language sql immutable as $$ select (make_date(p_year, p_month, 1) - interval '1 month')::date + 19; $$;
+
+-- Cosa fa la persona in quel giorno: il suo turno principale, oppure la richiesta in attesa
+create or replace function public.tipo_giorno(p_staff bigint, p_date date, p_escludi bigint default null)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (select s.kind from public.shifts s
+      where s.staff_id = p_staff and s.date = p_date and s.kind in ('M','P','N','R','RR','F','FS','PERM','T1018') limit 1),
+    (select r.kind from public.requests r
+      where r.staff_id = p_staff and r.date = p_date and r.status = 'pending' and r.id is distinct from p_escludi limit 1));
+$$;
+revoke all on function public.tipo_giorno(bigint, date, bigint) from public;
+
+-- Le regole del foglio applicate a UNA richiesta: se una regola BLOCCA solleva un errore,
+-- altrimenti restituisce l'elenco delle regole non rispettate (vuoto = richiesta regolare)
+drop function if exists public.controlla_regole_richiesta(bigint, date, text, bigint);
+create or replace function public.controlla_regole_richiesta(p_staff bigint, p_date date, p_kind text, p_escludi bigint default null)
+returns text[]
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare prima text; dopo text; sx int := 0; dx int := 0; n int; a text[] := '{}';
+        estate boolean := extract(month from p_date) in (6,7,8);
+begin
+  if public.tipo_giorno(p_staff, p_date, p_escludi) is not null then
+    raise exception 'In quel giorno hai già un turno, un riposo o una richiesta.' using errcode = '22023';
+  end if;
+  prima := public.tipo_giorno(p_staff, p_date - 1, p_escludi);
+  dopo  := public.tipo_giorno(p_staff, p_date + 1, p_escludi);
+
+  if prima = 'N' and p_kind <> 'N' then
+    a := array_append(a, 'Il giorno dopo una notte è riposo obbligatorio.');
+  end if;
+  if p_kind = 'N' then
+    if dopo is not null and dopo not in ('N','R','RR') then
+      a := array_append(a, 'Il giorno dopo una notte deve restare libero per il riposo.');
+    end if;
+    while public.tipo_giorno(p_staff, p_date - (sx + 1), p_escludi) = 'N' loop sx := sx + 1; end loop;
+    while public.tipo_giorno(p_staff, p_date + (dx + 1), p_escludi) = 'N' loop dx := dx + 1; end loop;
+    if sx + dx + 1 >= 3 then a := array_append(a, 'Più di due notti consecutive.'); end if;
+  end if;
+  if (p_kind = 'M' and prima = 'P') or (p_kind = 'P' and dopo = 'M') then
+    a := array_append(a, 'Una mattina il giorno dopo un pomeriggio: restano meno di 11 ore di stacco.');
+  end if;
+  if p_kind in ('M','P','N') then
+    sx := 0; dx := 0;
+    while public.tipo_giorno(p_staff, p_date - (sx + 1), p_escludi) in ('M','P','N','T1018') loop sx := sx + 1; end loop;
+    while public.tipo_giorno(p_staff, p_date + (dx + 1), p_escludi) in ('M','P','N','T1018') loop dx := dx + 1; end loop;
+    if sx + dx + 1 > 4 then a := array_append(a, 'Più di 4 giorni di lavoro consecutivi.'); end if;
+    if exists (select 1 from public.shifts s where s.date = p_date and s.kind = p_kind and s.staff_id <> p_staff)
+       or exists (select 1 from public.requests r where r.date = p_date and r.kind = p_kind and r.status = 'pending'
+                   and r.staff_id <> p_staff and r.id is distinct from p_escludi) then
+      raise exception 'Quel turno è già stato chiesto o assegnato a un altro collega.' using errcode = '22023';
+    end if;
+  else
+    select count(*) into n from (
+      select s.staff_id from public.shifts s where s.date = p_date and s.kind in ('R','RR') and s.staff_id <> p_staff
+      union
+      select r.staff_id from public.requests r where r.date = p_date and r.kind = 'RR' and r.status = 'pending'
+         and r.staff_id <> p_staff and r.id is distinct from p_escludi) x;
+    if estate and n >= 1 then
+      raise exception 'D''estate in un giorno può riposare una sola persona: quel giorno c''è già un riposo.' using errcode = '22023';
+    end if;
+    if n >= 2 then
+      raise exception 'Quel giorno ci sono già due riposi.' using errcode = '22023';
+    end if;
+    if n = 1 then a := array_append(a, 'È il secondo riposo di quel giorno.'); end if;
+    if estate and (prima in ('R','RR') or dopo in ('R','RR')) then
+      a := array_append(a, 'D''estate non sono previsti due riposi di fila.');
+    end if;
+  end if;
+  return a;
+end;
+$$;
+revoke all on function public.controlla_regole_richiesta(bigint, date, text, bigint) from public;
+
+create or replace function public.nome_mese(p_month int) returns text language sql immutable as $$
+  select (array['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'])[p_month];
+$$;
+
+-- Mesi per cui le richieste sono aperte adesso
+create or replace function public.mesi_richieste()
+returns table (year int, month int, scadenza date)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.year, m.month, public.richieste_scadenza(m.year, m.month)
+    from public.months m
+   where m.requests_open and public.is_staff_member()
+     and public.oggi() <= public.richieste_scadenza(m.year, m.month)
+   order by m.year, m.month;
+$$;
+
+-- L'operatore invia una richiesta. Se qualche regola avvisa e p_conferma è falso, l'errore inizia con
+-- "[avviso]": l'app lo mostra e, se l'operatore vuole, richiama con p_conferma = true.
+drop function if exists public.invia_richiesta(date, text);
+create or replace function public.invia_richiesta(p_date date, p_kind text, p_conferma boolean default false)
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_staff bigint := public.mia_persona(); v_id bigint; v_n int; v_nome text; v_lbl text; v_av text[];
+begin
+  if v_staff is null then raise exception 'Accesso non valido.' using errcode = '42501'; end if;
+  if p_date is null or p_kind not in ('RR','M','P','N') then raise exception 'Richiesta non valida.' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('richieste'));
+  if not exists (select 1 from public.months m
+                  where m.year = extract(year from p_date)::int and m.month = extract(month from p_date)::int
+                    and m.requests_open and public.oggi() <= public.richieste_scadenza(m.year, m.month)) then
+    raise exception 'Le richieste per questo mese non sono aperte.' using errcode = '22023';
+  end if;
+  select count(*) into v_n from public.requests r
+   where r.staff_id = v_staff and r.status in ('pending','accepted')
+     and date_trunc('month', r.date) = date_trunc('month', p_date);
+  if v_n >= 3 then raise exception 'Hai già fatto 3 richieste per questo mese.' using errcode = '22023'; end if;
+  v_av := public.controlla_regole_richiesta(v_staff, p_date, p_kind, null);
+  if cardinality(v_av) > 0 and not p_conferma then
+    raise exception '[avviso] %', array_to_string(v_av, E'\n') using errcode = '22023';
+  end if;
+
+  insert into public.requests (staff_id, date, kind, avvisi) values (v_staff, p_date, p_kind, v_av) returning id into v_id;
+  select name into v_nome from public.staff where id = v_staff;
+  v_lbl := case p_kind when 'RR' then 'un riposo' when 'M' then 'la mattina' when 'P' then 'il pomeriggio' else 'la notte' end;
+  insert into public.notifications (staff_id, kind, text, data)
+  select c.id, 'richiesta',
+         v_nome || ' ha chiesto ' || v_lbl || ' il ' || to_char(p_date, 'DD/MM') || '.' ||
+           case when cardinality(v_av) > 0 then ' Richiesta critica: ' || array_to_string(v_av, ' ') else '' end,
+         jsonb_build_object('request', v_id)
+    from public.staff c
+   where c.role = 'coordinator' and c.active and c.id <> v_staff and (c.end_date is null or c.end_date >= current_date);
+  return v_id;
+end;
+$$;
+
+create or replace function public.annulla_richiesta(p_id bigint)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.requests set status = 'cancelled', decided_at = now()
+   where id = p_id and status = 'pending' and staff_id = public.mia_persona();
+$$;
+
+-- Marie accetta o rifiuta. La motivazione è obbligatoria se rifiuta o se la richiesta è critica.
+drop function if exists public.rispondi_richiesta(bigint, boolean, boolean);
+create or replace function public.rispondi_richiesta(p_id bigint, p_accetta boolean, p_motivo text default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare r public.requests; v_lbl text; v_mot text := nullif(btrim(coalesce(p_motivo, '')), '');
+begin
+  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock(hashtext('richieste'));
+  select * into r from public.requests where id = p_id and status = 'pending';
+  if not found then raise exception 'Richiesta non trovata o già decisa.' using errcode = '22023'; end if;
+  if v_mot is null and (not p_accetta or cardinality(r.avvisi) > 0) then
+    raise exception 'Scrivi la motivazione.' using errcode = '22023';
+  end if;
+  v_lbl := case r.kind when 'RR' then 'di riposo' when 'M' then 'della mattina' when 'P' then 'del pomeriggio' else 'della notte' end;
+
+  if p_accetta then
+    insert into public.shifts (staff_id, date, kind, requested)
+    values (r.staff_id, r.date, r.kind, r.kind in ('M','P','N'));
+  end if;
+  update public.requests set status = case when p_accetta then 'accepted' else 'rejected' end, decided_at = now(), motivo = v_mot where id = r.id;
+  insert into public.notifications (staff_id, kind, text, data)
+  values (r.staff_id, 'richiesta',
+          'La tua richiesta ' || v_lbl || ' del ' || to_char(r.date, 'DD/MM') || ' è stata ' ||
+          case when p_accetta then 'accettata.' else 'rifiutata.' end || coalesce(' Motivo: ' || v_mot, ''),
+          jsonb_build_object('request', r.id));
+end;
+$$;
+
+-- Scaduto il termine (dopo il 20 del mese prima) le richieste non esaminate valgono come ACCETTATE:
+-- se Marie non le ha controllate è una sua mancanza, non dell'operatore. L'app la chiama a ogni apertura.
+create or replace function public.elabora_scadenze()
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare r record; n int := 0; v_lbl text;
+begin
+  if not public.is_staff_member() then return 0; end if;
+  perform pg_advisory_xact_lock(hashtext('richieste'));
+  for r in select * from public.requests q
+            where q.status = 'pending'
+              and public.oggi() > public.richieste_scadenza(extract(year from q.date)::int, extract(month from q.date)::int)
+            order by q.created_at, q.id loop
+    v_lbl := case r.kind when 'RR' then 'di riposo' when 'M' then 'della mattina' when 'P' then 'del pomeriggio' else 'della notte' end;
+    begin
+      insert into public.shifts (staff_id, date, kind, requested) values (r.staff_id, r.date, r.kind, r.kind in ('M','P','N'));
+      update public.requests set status = 'accepted', decided_at = now(),
+             motivo = 'Accettata in automatico: scaduti i termini senza risposta.' where id = r.id;
+      insert into public.notifications (staff_id, kind, text, data)
+      values (r.staff_id, 'richiesta', 'La tua richiesta ' || v_lbl || ' del ' || to_char(r.date, 'DD/MM') ||
+              ' è stata accettata (nessuna risposta entro i termini).', jsonb_build_object('request', r.id));
+    exception when others then
+      update public.requests set status = 'rejected', decided_at = now(),
+             motivo = 'Non applicabile: in quel giorno c''era già un altro turno.' where id = r.id;
+      insert into public.notifications (staff_id, kind, text, data)
+      values (r.staff_id, 'richiesta', 'La tua richiesta ' || v_lbl || ' del ' || to_char(r.date, 'DD/MM') ||
+              ' non è applicabile: in quel giorno c''era già un altro turno.', jsonb_build_object('request', r.id));
+    end;
+    n := n + 1;
+  end loop;
+  return n;
+end;
+$$;
+
+-- Marie apre o chiude le richieste di un mese (all'apertura avvisa tutti gli operatori)
+create or replace function public.imposta_richieste(p_year int, p_month int, p_aperto boolean)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  insert into public.months (year, month, requests_open) values (p_year, p_month, p_aperto)
+  on conflict (year, month) do update set requests_open = excluded.requests_open;
+  if p_aperto then
+    insert into public.notifications (staff_id, kind, text, data)
+    select s.id, 'richieste',
+           'Sono aperte le richieste di ' || public.nome_mese(p_month) || ' ' || p_year || ': puoi inserirle entro il ' ||
+           to_char(public.richieste_scadenza(p_year, p_month), 'DD/MM') || ' (massimo 3, riposi e turni).',
+           jsonb_build_object('year', p_year, 'month', p_month)
+      from public.staff s
+     where s.active and s.role = 'operator' and (s.end_date is null or s.end_date >= current_date);
+  end if;
+end;
+$$;
+
+revoke all on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean), public.annulla_richiesta(bigint),
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.imposta_richieste(int, int, boolean) from public;
+grant execute on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean), public.annulla_richiesta(bigint),
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.imposta_richieste(int, int, boolean) to authenticated;
+
+-- Tutti i membri del personale vedono tutte le richieste
+alter table public.requests enable row level security;
+drop policy if exists requests_select on public.requests;
+create policy requests_select on public.requests
+  for select to authenticated
+  using (public.is_staff_member());
+revoke all on public.requests from anon, authenticated;
+grant select on public.requests to authenticated;
+
+-- Nel mese in preparazione gli operatori vedono solo ciò che è stato chiesto o programmato da loro:
+-- ferie, domeniche in ferie, permessi, riposi richiesti e turni richiesti. Il resto del piano resta nascosto
+-- finché Marie non pubblica.
+drop policy if exists shifts_select on public.shifts;
+create policy shifts_select on public.shifts
+  for select to authenticated
+  using (public.is_coordinator()
+         or (public.is_staff_member()
+             and (public.is_published(date) or kind in ('RR','F','FS','PERM') or requested)));

@@ -26,6 +26,16 @@ con un piano di esempio di novembre 2026 (non è il piano vero) e senza account.
   si salvano solo le date. Marie riceve la notifica nell'app e per ogni turno sceglie la copertura: la proposta (+4 ore a chi
   sta prima e a chi sta dopo) oppure un altro accordo (aggiunge la persona che copre, con i suoi orari). Solo allora i
   colleghi ricevono la loro notifica e quel giorno risulta fatto da solo; a giorni finiti la segnalazione sparisce. Le regole sono nel database (sezione 15 di `schema.sql`).
+- **Richieste di riposo o di turno:** Marie apre le richieste di un mese (pulsante *Richieste*) e gli operatori ricevono
+  l'avviso. Ognuno può inviarne al massimo 3 (riposi e turni insieme) entro il 20 del mese prima. Il database **blocca**
+  solo: giorno già occupato, turno già chiesto da un altro (vince chi chiede prima), troppi riposi nello stesso giorno
+  (2; in estate 1). Le altre regole **avvisano** soltanto (mattina dopo un pomeriggio, più di due notti di fila, più di 4
+  giorni di lavoro consecutivi, qualsiasi cosa il giorno dopo una notte, secondo riposo nello stesso giorno, in estate due
+  riposi di fila): l'operatore può inviare comunque e Marie vede la richiesta in giallo ("critica"); per accettarla o
+  rifiutarla scrive la motivazione (obbligatoria anche se rifiuta una richiesta normale). Dopo il 20 del mese prima le
+  richieste non esaminate valgono come **accettate** (lo fa il database all'apertura dell'app). Tutti gli operatori vedono
+  tutte le richieste, anche ferie e permessi, e nel mese non ancora pubblicato il foglio mostra solo ferie, permessi,
+  riposi e turni richiesti (le richieste in attesa sono tratteggiate). Le regole sono nel database (sezione 16 di `schema.sql`).
 - Installabile sul telefono (PWA). Notifiche nell'app già attive per la malattia; le email e le notifiche sul telefono arrivano nei prossimi passi della fase 2.
 
 ## Installazione (circa 30 minuti)
