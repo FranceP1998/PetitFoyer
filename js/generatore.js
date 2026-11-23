@@ -79,7 +79,7 @@ export function costruisciModello(dati) {
     for (let d = 1; d <= DX; d++) {
       const data = dataDi(d);
       const rr = riga(p.id, data);
-      const st = { assente: false, lavoro: null, occupato: false };
+      const st = { assente: false, lavoro: null, occupato: false, stab: false };
       if (p.start_date && data < p.start_date) st.assente = true;
       if (p.end_date && data > p.end_date) st.assente = true;
       const haMalattia = rr.some((r) => r.kind === 'MU');
@@ -89,6 +89,9 @@ export function costruisciModello(dati) {
         if (ASSENZE.includes(r.kind)) st.assente = true;
         if (r.kind === 'T1018') st.occupato = true;
         if (TURNI.includes(r.kind) && (r.requested || haMalattia || fermo)) st.lavoro = r.kind;
+        // turni "stabiliti": richiesti e accettati, di malattia, o decisi dal mese prima / dal mese dopo già pubblicato.
+        // Non li sceglie il generatore: se tra loro creano un conflitto, il conflitto non gli va attribuito.
+        if (TURNI.includes(r.kind) && (r.requested || haMalattia || d === 1 || (dati.anticipoBloccato && d === DX))) st.stab = true;
         if (r.kind === 'R' && !r.requested && fermo) st.assente = true;
       }
       stato[p.id][d] = st;
@@ -179,7 +182,7 @@ export function costruisciModello(dati) {
   return {
     info,
     meta: { Y, Mo, D, DX, DG, operatori: operatori.map((p) => p.id), flessibili: flessibili.map((p) => p.id), fissi: fissi.map((p) => p.id), weekend, settimane },
-    _interni: { fisso, stato, dataDi, passato, operatori, memoriaOp, moltDoppie, bersagli, bersaglioTotale, venerdi },
+    _interni: { fisso, stato, dataDi, passato, stab: (o, d) => d <= 0 || !!(stato[o][d] && stato[o][d].stab), operatori, memoriaOp, moltDoppie, bersagli, bersaglioTotale, venerdi },
   };
 }
 
@@ -423,7 +426,9 @@ export function leggiSoluzione(m, valori, dati) {
 export function riepilogo(m, sol) {
   const { D, DX, DG, operatori: ids, fissi, weekend, settimane } = m.meta;
   const { assegn } = sol;
-  const { stato, dataDi } = m._interni;
+  const { stato, dataDi, stab } = m._interni;
+  // un conflitto si segnala solo se almeno uno dei turni coinvolti l'ha scelto il generatore
+  const sceltoGen = (o, d) => !!at(o, d) && !stab(o, d);
   const nome = new Map(m._interni.operatori.map((p) => [p.id, p.name]));
   const at = (o, d) => assegn[o][d] || null;
   const gg = (d) => { const x = dataDi(d); return `${x.slice(8, 10)}/${x.slice(5, 7)}`; };
@@ -432,24 +437,27 @@ export function riepilogo(m, sol) {
   for (const o of ids) {
     const conta = { M: 0, P: 0, N: 0 };
     for (let d = 1; d <= D; d++) { const t = at(o, d); if (t) conta[t]++; }
-    let doppie = 0, oltre4 = 0, maxFila = 0, fila = 0;
+    let doppie = 0, oltre4 = 0, oltre4Gen = 0, maxFila = 0, fila = 0;
     const occupa = (d) => !!(at(o, d) || at(o, d - 1) === 'N' || (d >= 1 && stato[o][d] && stato[o][d].occupato));
     for (let d = 1; d <= DG; d++) {
       if (at(o, d) === 'N' && at(o, d + 1) === 'N' && d < D) doppie++;
-      if (at(o, d) === 'P' && at(o, d + 1) === 'M' && d + 1 <= DG) problemi.push(`${nome.get(o)}: mattina dopo un pomeriggio il ${gg(d + 1)}`);
-      if (at(o, d) === 'N' && d + 2 <= DG && at(o, d + 2)) problemi.push(`${nome.get(o)}: turno il giorno di riposo dopo la notte (${gg(d + 2)})`);
-      if (at(o, d - 1) === 'N' && (at(o, d) === 'M' || at(o, d) === 'P')) problemi.push(`${nome.get(o)}: turno subito dopo la notte (${gg(d)})`);
+      if (at(o, d) === 'P' && at(o, d + 1) === 'M' && d + 1 <= DG && (sceltoGen(o, d) || sceltoGen(o, d + 1))) problemi.push(`${nome.get(o)}: mattina dopo un pomeriggio il ${gg(d + 1)}`);
+      if (at(o, d) === 'N' && d + 2 <= DG && at(o, d + 2) && (sceltoGen(o, d) || sceltoGen(o, d + 2))) problemi.push(`${nome.get(o)}: turno il giorno di riposo dopo la notte (${gg(d + 2)})`);
+      if (at(o, d - 1) === 'N' && (at(o, d) === 'M' || at(o, d) === 'P') && (sceltoGen(o, d - 1) || sceltoGen(o, d))) problemi.push(`${nome.get(o)}: turno subito dopo la notte (${gg(d)})`);
       fila = occupa(d) ? fila + 1 : 0; maxFila = Math.max(maxFila, fila);
     }
-    for (let d = 1; d + 4 <= DG; d++) if ([0, 1, 2, 3, 4].every((k) => occupa(d + k))) oltre4++;
-    let liberi = null, meta = null, pieni = null;
+    for (let d = 1; d + 4 <= DG; d++) if ([0, 1, 2, 3, 4].every((k) => occupa(d + k))) {
+      oltre4++;
+      if ([-1, 0, 1, 2, 3, 4].some((k) => sceltoGen(o, d + k))) oltre4Gen++;
+    }
+    let liberi = null, meta = null, pieni = null, pieniGen = 0;
     if (!fissi.includes(o) && weekend.length) {
       liberi = 0; meta = 0; pieni = 0;
       for (const [sa, su] of weekend) {
         const a = !!(at(o, sa) || (stato[o][sa] && stato[o][sa].occupato));
         const b = !!(at(o, su) || at(o, sa) === 'N' || (stato[o][su] && stato[o][su].occupato));
         const n = (a ? 1 : 0) + (b ? 1 : 0);
-        if (n === 0) liberi++; else if (n === 1) meta++; else pieni++;
+        if (n === 0) liberi++; else if (n === 1) meta++; else { pieni++; if ([sa - 1, sa, su].some((x) => sceltoGen(o, x))) pieniGen++; }
       }
     }
     // alternanza: settimane in cui lo stesso turno torna 3 volte o più
@@ -457,15 +465,15 @@ export function riepilogo(m, sol) {
     if (!fissi.includes(o)) for (const [a, b] of settimane) {
       for (const t of TURNI) {
         let n = 0; for (let d = a; d <= b; d++) if (at(o, d) === t) n++;
-        if (n >= 3) { ripetute++; problemi.push(`${nome.get(o)}: stesso turno (${t}) ${n} volte nella settimana dal ${gg(a)}`); }
+        if (n >= 3 && [...Array(b - a + 1).keys()].some((k) => at(o, a + k) === t && sceltoGen(o, a + k))) { ripetute++; problemi.push(`${nome.get(o)}: stesso turno (${t}) ${n} volte nella settimana dal ${gg(a)}`); }
       }
     }
-    persone.push({ id: o, nome: nome.get(o), ...conta, totale: conta.M + conta.P + conta.N, doppie, oltre4, maxFila, weekendLiberi: liberi, weekendMezzi: meta, weekendPieni: pieni, ripetute, fisso: fissi.includes(o) });
+    persone.push({ id: o, nome: nome.get(o), ...conta, totale: conta.M + conta.P + conta.N, doppie, oltre4, oltre4Gen, maxFila, weekendLiberi: liberi, weekendMezzi: meta, weekendPieni: pieni, pieniGen, ripetute, fisso: fissi.includes(o) });
   }
   for (const p of persone) {
-    if (p.oltre4) problemi.push(`${p.nome}: più di 4 giorni di fila (${p.maxFila})`);
+    if (p.oltre4Gen) problemi.push(`${p.nome}: più di 4 giorni di fila (${p.maxFila})`);
     if (p.weekendLiberi === 0) problemi.push(`${p.nome}: nessun weekend con sabato e domenica entrambi liberi`);
-    if (p.weekendPieni) problemi.push(`${p.nome}: sabato e domenica entrambi di lavoro in ${p.weekendPieni} weekend`);
+    if (p.pieniGen) problemi.push(`${p.nome}: sabato e domenica entrambi di lavoro in ${p.pieniGen} weekend`);
   }
   // anticipo sul mese dopo: chi fa cosa il 1° giorno
   let anticipo = null;
