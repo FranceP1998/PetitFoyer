@@ -253,8 +253,7 @@ function backendDemo() {
       salva();
     },
     // --- festività: date scelte dalla coordinatrice e turni assegnati nella riunione (fissi e sempre visibili) ---
-    async elencaFestivita(y) {
-      const da = `${y}-01-01`, a = `${y}-12-31`;
+    async elencaFestivita(da, a) {
       return {
         giorni: (db.holidays || []).filter((h) => h.date >= da && h.date <= a).sort((x, z) => x.date.localeCompare(z.date)),
         turni: db.shifts.filter((s) => s.festivo && s.date >= da && s.date <= a).map((s) => ({ staff_id: s.staff_id, date: s.date, kind: s.kind })),
@@ -441,8 +440,7 @@ async function backendSupabase() {
         errore(await sb.from('shifts').insert(daAggiungere.map((v) => ({ staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null }))));
       }
     },
-    async elencaFestivita(y) {
-      const da = `${y}-01-01`, a = `${y}-12-31`;
+    async elencaFestivita(da, a) {
       const [giorni, turni] = await Promise.all([
         sb.from('holidays').select('date,label').gte('date', da).lte('date', a).order('date').then(errore),
         sb.from('shifts').select('staff_id,date,kind').eq('festivo', true).gte('date', da).lte('date', a).then(errore),

@@ -5,7 +5,7 @@ import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
 import { generaPiano, calcolaStorico, DEFAULT_TEMPO } from './generatore.js';
-import { festivitaPredefinite } from './festivita.js';
+import { festivitaPredefinite, stagioneDi, intervalloStagione, nomeStagione } from './festivita.js';
 import { scadenzaRichieste, decisioneRichieste, giornoLibero, weekendPredefinito } from './richieste.js';
 
 const $ = (id) => document.getElementById(id);
@@ -130,7 +130,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v32`;
+  $('utente').textContent = `${stato.utente.name} · v33`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -634,25 +634,27 @@ $('btn-pulisci').onclick = async () => {
 };
 
 // ------------------------------------------------------------ festività (coordinatrice)
-const feStato = { y: 0, dati: { giorni: [], turni: [] } };
+const feStato = { st: 0, dati: { giorni: [], turni: [] } };
 const GIORNI_SETT = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
 const feErrore = (t) => { $('fe-err').textContent = t; $('fe-err').hidden = !t; };
 async function feCarica() {
-  feStato.dati = await stato.be.elencaFestivita(feStato.y);
+  const { da, a } = intervalloStagione(feStato.st);
+  feStato.dati = await stato.be.elencaFestivita(da, a);
   feDisegna();
 }
 function feDisegna() {
   const ops = stato.dati.staff.filter((p) => p.role === 'operator' && p.active !== false).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  $('fe-anno').textContent = feStato.y;
-  const mancano = festivitaPredefinite(feStato.y).filter((f) => !feStato.dati.giorni.some((g) => g.date === f.date));
-  $('fe-predef').textContent = `Aggiungi le festività predefinite del ${feStato.y}`;
+  $('fe-anno').textContent = `Stagione ${nomeStagione(feStato.st)}`;
+  $('fe-periodo').textContent = `dal 24 dicembre ${feStato.st} al 15 agosto ${feStato.st + 1}`;
+  const mancano = festivitaPredefinite(feStato.st).filter((f) => !feStato.dati.giorni.some((g) => g.date === f.date));
+  $('fe-predef').textContent = `Aggiungi le festività predefinite ${nomeStagione(feStato.st)}`;
   $('fe-predef').hidden = !mancano.length;
   const chi = (data, k) => feStato.dati.turni.find((t) => t.date === data && t.kind === k)?.staff_id ?? '';
   const sel = (data, k) => `<select data-d="${data}" data-k="${k}" aria-label="${k === 'M' ? 'Mattina' : k === 'P' ? 'Pomeriggio' : 'Notte'} del ${data.slice(8, 10)}/${data.slice(5, 7)}"><option value="">—</option>${ops.map((p) => `<option value="${p.id}"${String(chi(data, k)) === String(p.id) ? ' selected' : ''}>${p.name}</option>`).join('')}</select>`;
   let h = '<div class="fe-riga fe-intest"><span>Festività</span><span>Mattina</span><span>Pomeriggio</span><span>Notte</span><span></span></div>';
   for (const g of feStato.dati.giorni) {
     const gs = GIORNI_SETT[new Date(`${g.date}T12:00:00Z`).getUTCDay()];
-    h += `<div class="fe-riga"><div class="fe-nome"><b>${g.date.slice(8, 10)}/${g.date.slice(5, 7)}</b> <small>${gs}</small><input type="text" class="fe-rinomina" data-nome="${g.date}" value="${esc(g.label)}" maxlength="60" aria-label="Nome della festività del ${g.date.slice(8, 10)}/${g.date.slice(5, 7)}"></div>${sel(g.date, 'M')}${sel(g.date, 'P')}${sel(g.date, 'N')}<button type="button" class="link" data-togli="${g.date}">Togli</button></div>`;
+    h += `<div class="fe-riga"><div class="fe-nome"><b>${g.date.slice(8, 10)}/${g.date.slice(5, 7)}</b> <small>${gs} ${g.date.slice(0, 4)}</small><input type="text" class="fe-rinomina" data-nome="${g.date}" value="${esc(g.label)}" maxlength="60" aria-label="Nome della festività del ${g.date.slice(8, 10)}/${g.date.slice(5, 7)}"></div>${sel(g.date, 'M')}${sel(g.date, 'P')}${sel(g.date, 'N')}<button type="button" class="link" data-togli="${g.date}">Togli</button></div>`;
   }
   if (!feStato.dati.giorni.length) h += '<p class="muted">Nessuna festività per quest\'anno. Aggiungi quelle predefinite o inserisci una data.</p>';
   $('fe-lista').innerHTML = h;
@@ -661,16 +663,16 @@ function feDisegna() {
     const t = feStato.dati.turni.filter((x) => x.staff_id === p.id);
     return `${p.name} ${new Set(t.map((x) => x.date)).size}${t.some((x) => x.kind === 'N') ? ` (${t.filter((x) => x.kind === 'N').length} not.)` : ''}`;
   });
-  $('fe-conti').textContent = feStato.dati.turni.length ? `Festività assegnate nel ${feStato.y}: ${conti.join(' · ')}` : '';
+  $('fe-conti').textContent = feStato.dati.turni.length ? `Festività assegnate nella stagione ${nomeStagione(feStato.st)}: ${conti.join(' · ')}` : '';
 }
 $('btn-festivita').onclick = async () => {
-  feStato.y = stato.y; feErrore('');
+  feStato.st = stagioneDi(`${stato.y}-${pad(stato.m)}-01`); feErrore('');
   $('fe-data').value = '';
   $('dlg-festivita').showModal();
   try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
 };
-$('fe-prev').onclick = async () => { feStato.y--; feErrore(''); try { await feCarica(); } catch (e) { feErrore(messaggio(e)); } };
-$('fe-next').onclick = async () => { feStato.y++; feErrore(''); try { await feCarica(); } catch (e) { feErrore(messaggio(e)); } };
+$('fe-prev').onclick = async () => { feStato.st--; feErrore(''); try { await feCarica(); } catch (e) { feErrore(messaggio(e)); } };
+$('fe-next').onclick = async () => { feStato.st++; feErrore(''); try { await feCarica(); } catch (e) { feErrore(messaggio(e)); } };
 $('fe-chiudi').onclick = () => $('dlg-festivita').close();
 $('dlg-festivita').addEventListener('close', () => { carica(); });
 $('fe-lista').addEventListener('change', async (ev) => {
@@ -702,7 +704,7 @@ $('fe-lista').addEventListener('click', async (ev) => {
 $('fe-aggiungi').onclick = async () => {
   const data = $('fe-data').value;
   if (!data) return feErrore('Scegli la data.');
-  if (data.slice(0, 4) !== String(feStato.y)) { feStato.y = +data.slice(0, 4); }
+  feStato.st = stagioneDi(data);   // se la data è di un'altra stagione si passa a quella
   feErrore('');
   try { await stato.be.impostaFestivita(data, $('fe-nome').value.trim() || 'Festività', {}); $('fe-data').value = ''; $('fe-nome').value = ''; } catch (e) { feErrore(messaggio(e)); }
   try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
@@ -710,7 +712,7 @@ $('fe-aggiungi').onclick = async () => {
 $('fe-predef').onclick = async () => {
   feErrore('');
   try {
-    for (const f of festivitaPredefinite(feStato.y)) if (!feStato.dati.giorni.some((g) => g.date === f.date)) await stato.be.impostaFestivita(f.date, f.label, {});
+    for (const f of festivitaPredefinite(feStato.st)) if (!feStato.dati.giorni.some((g) => g.date === f.date)) await stato.be.impostaFestivita(f.date, f.label, {});
   } catch (e) { feErrore(messaggio(e)); }
   try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
 };

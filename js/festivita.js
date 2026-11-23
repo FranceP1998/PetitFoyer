@@ -11,19 +11,25 @@ export function pasqua(y) {
 }
 const piu = (data, n) => { const x = new Date(`${data}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 
-export function festivitaPredefinite(y) {
-  const p = pasqua(y);
+// Le festività si decidono per "stagione", come l'anno scolastico: da Natale all'estate dopo (dal 24 dicembre al 15 agosto).
+// La stagione 2026 va dal 16 agosto 2026 al 15 agosto 2027 (così contiene anche eventuali date aggiunte in autunno).
+export const stagioneDi = (data) => (data.slice(5) >= '08-16' ? +data.slice(0, 4) : +data.slice(0, 4) - 1);
+export const intervalloStagione = (st) => ({ da: `${st}-08-16`, a: `${st + 1}-08-15` });
+export const nomeStagione = (st) => `${st}/${String(st + 1).slice(2)}`;
+
+export function festivitaPredefinite(st) {
+  const p = pasqua(st + 1);
   return [
-    { date: `${y}-01-01`, label: 'Capodanno' },
-    { date: `${y}-01-06`, label: 'Epifania' },
+    { date: `${st}-12-24`, label: 'Vigilia di Natale' },
+    { date: `${st}-12-25`, label: 'Natale' },
+    { date: `${st}-12-31`, label: "Ultimo dell'anno" },
+    { date: `${st + 1}-01-01`, label: 'Capodanno' },
+    { date: `${st + 1}-01-06`, label: 'Epifania' },
     { date: p, label: 'Pasqua' },
     { date: piu(p, 1), label: 'Pasquetta' },
-    { date: `${y}-04-25`, label: 'Festa della Liberazione' },
-    { date: `${y}-05-01`, label: 'Festa dei lavoratori' },
-    { date: `${y}-06-02`, label: 'Festa della Repubblica' },
-    { date: `${y}-08-15`, label: 'Ferragosto' },
-    { date: `${y}-12-24`, label: 'Vigilia di Natale' },
-    { date: `${y}-12-25`, label: 'Natale' },
-    { date: `${y}-12-31`, label: "Ultimo dell'anno" },
+    { date: `${st + 1}-04-25`, label: 'Festa della Liberazione' },
+    { date: `${st + 1}-05-01`, label: 'Festa dei lavoratori' },
+    { date: `${st + 1}-06-02`, label: 'Festa della Repubblica' },
+    { date: `${st + 1}-08-15`, label: 'Ferragosto' },
   ];
 }
