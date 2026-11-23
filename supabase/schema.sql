@@ -1191,8 +1191,9 @@ $$;
 
 -- Scrive nel mese il piano proposto dal generatore (bozza). Tutto in una volta: o va tutto o non cambia niente.
 -- Il periodo è il mese più il 1° del mese dopo (se quel mese non è pubblicato).
--- p_sostituisci = true: prima toglie M, P, N e R non richiesti del periodo (ferie, permessi, richieste accettate, malattie,
--- coperture e il resto restano); false: aggiunge soltanto, il generatore ha già lasciato fuori le caselle occupate.
+-- p_sostituisci = true: prima toglie M, P, N e R non richiesti del periodo, tranne quelli del 1° giorno del mese, che sono
+-- già stati stabiliti dal piano del mese prima (anticipo) e non si cambiano più (ferie, permessi, richieste accettate,
+-- malattie, coperture e il resto restano); false: aggiunge soltanto, il generatore ha già lasciato fuori le caselle occupate.
 create or replace function public.scrivi_piano(p_year int, p_month int, p_righe jsonb, p_sostituisci boolean)
 returns int
 language plpgsql
@@ -1210,7 +1211,7 @@ begin
     v_a := v_a + 1;
   end if;
   if p_sostituisci then
-    delete from public.shifts where date between v_da and v_a and kind in ('M','P','N','R') and not requested
+    delete from public.shifts where date between v_da + 1 and v_a and kind in ('M','P','N','R') and not requested
       and not exists (select 1 from public.shifts mu where mu.staff_id = shifts.staff_id and mu.date = shifts.date and mu.kind = 'MU');
   end if;
   insert into public.shifts (staff_id, date, kind, requested)

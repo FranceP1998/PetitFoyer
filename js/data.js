@@ -182,7 +182,7 @@ function backendDemo() {
       const a = dopoPubblicato ? iso(y, m, giorniDelMese(y, m)) : iso(dopo.y, dopo.m, 1);
       if (sostituisci) {
         const mu = new Set(db.shifts.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
-        db.shifts = db.shifts.filter((s) => !(s.date >= da && s.date <= a && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !mu.has(`${s.staff_id}|${s.date}`)));
+        db.shifts = db.shifts.filter((s) => !(s.date > da && s.date <= a && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !mu.has(`${s.staff_id}|${s.date}`)));
       }
       let n = 0;
       for (const r of righe) {

@@ -129,7 +129,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v28`;
+  $('utente').textContent = `${stato.utente.name} · v29`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -570,8 +570,8 @@ $('gn-avvia').onclick = async () => {
   const modo = genModo();
   const { year: y, month: m } = { year: stato.y, month: stato.m };
   const { righe: delMese, bloccato } = await ambitoGenerazione(y, m);
-  const daCancellare = delMese.filter((s) => ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested).length;
-  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}${bloccato ? '' : ' e nel 1° giorno del mese dopo'}. Ferie, permessi, richieste accettate e malattie restano. Continuare?`)) return;
+  const daCancellare = delMese.filter((s) => s.date > `${y}-${pad(m)}-01` && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested).length;
+  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}${bloccato ? '' : ' e nel 1° giorno del mese dopo'}. Ferie, permessi, richieste accettate e malattie restano, e restano anche i turni del 1° giorno, già stabiliti dal mese prima. Continuare?`)) return;
   genVista('calcolo');
   $('gn-tempo').textContent = '0%';
   try {
@@ -626,9 +626,9 @@ $('btn-pulisci').onclick = async () => {
   const y = stato.y, m = stato.m;
   const { righe: delMese } = await ambitoGenerazione(y, m);
   const malati = new Set(delMese.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
-  const n = delMese.filter((s) => ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !malati.has(`${s.staff_id}|${s.date}`)).length;
+  const n = delMese.filter((s) => s.date > `${y}-${pad(m)}-01` && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !malati.has(`${s.staff_id}|${s.date}`)).length;
   if (!n) { alert('Non c\'è niente da cancellare: in questo mese ci sono solo caselle protette.'); return; }
-  if (!confirm(`Cancello ${n} turni e riposi di ${nomeMese(m).toLowerCase()} ${y} (compreso il 1° giorno del mese dopo, se non è pubblicato)?\n\nRestano ferie, permessi, riposi richiesti, richieste accettate, malattie, 10-18, coperture e collettivi.`)) return;
+  if (!confirm(`Cancello ${n} turni e riposi di ${nomeMese(m).toLowerCase()} ${y} (compreso il 1° giorno del mese dopo, se non è pubblicato)?\n\nRestano i turni del 1° giorno del mese (già stabiliti dal mese prima), ferie, permessi, riposi richiesti, richieste accettate, malattie, 10-18, coperture e collettivi.`)) return;
   try { await stato.be.scriviPiano(y, m, [], true); await carica(); } catch (e) { alert(messaggio(e)); }
 };
 

@@ -84,7 +84,7 @@ export function costruisciModello(dati) {
       if (p.end_date && data > p.end_date) st.assente = true;
       const haMalattia = rr.some((r) => r.kind === 'MU');
       // il giorno d'anticipo con il mese dopo già pubblicato è tutto fisso; nella modalità "solo vuote" sono fissi tutti i turni scritti
-      const fermo = modalita === 'vuoti' || (dati.anticipoBloccato && d === DX);
+      const fermo = modalita === 'vuoti' || d === 1 || (dati.anticipoBloccato && d === DX);   // il 1° giorno l'ha già deciso il piano del mese prima
       for (const r of rr) {
         if (ASSENZE.includes(r.kind)) st.assente = true;
         if (r.kind === 'T1018') st.occupato = true;
@@ -389,7 +389,8 @@ export function leggiSoluzione(m, valori, dati) {
   }
   // nella modalità "rifà tutto" le righe non richieste (e senza malattia) vengono cancellate prima di scrivere: non contano come già presenti
   const malati = new Set((dati.shifts || []).filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
-  const resta = (dati.shifts || []).filter((s) => modalita === 'vuoti' || s.requested || malati.has(`${s.staff_id}|${s.date}`) || !['M', 'P', 'N', 'R'].includes(s.kind));
+  const primoGiorno = dataDi(1);
+  const resta = (dati.shifts || []).filter((s) => modalita === 'vuoti' || s.date === primoGiorno || s.requested || malati.has(`${s.staff_id}|${s.date}`) || !['M', 'P', 'N', 'R'].includes(s.kind));
   const esistenti = new Set(resta.map((s) => `${s.staff_id}|${s.date}|${s.kind}`));
   const haRiga = new Set(resta.map((s) => `${s.staff_id}|${s.date}`));
   const righe = [];
