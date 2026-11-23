@@ -31,6 +31,7 @@ export const DEMO = {
    "role": "operator",
    "sort_order": 40,
    "fixed_pattern": true,
+   "fixed_days": { "2": "P", "4": "M", "6": "N" },
    "active": true
   },
   {

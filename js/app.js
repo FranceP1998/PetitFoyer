@@ -4,6 +4,7 @@ import { renderGrid, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from
 import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
+import { generaPiano, calcolaStorico, DEFAULT_TEMPO } from './generatore.js';
 import { scadenzaRichieste, decisioneRichieste, giornoLibero, weekendPredefinito } from './richieste.js';
 
 const $ = (id) => document.getElementById(id);
@@ -128,7 +129,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v23`;
+  $('utente').textContent = `${stato.utente.name} · v24`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -533,6 +534,81 @@ $('malattie').addEventListener('click', async (ev) => {
 // ------------------------------------------------------------ malattia: comunicazione dell'operatore
 function malErrore(t) { $('ml-err').textContent = t || ''; $('ml-err').hidden = !t; }
 function malReset() { $('ml-anteprima').innerHTML = ''; malErrore(''); $('ml-conferma').hidden = true; $('ml-controlla').hidden = false; }
+
+// ------------------------------------------------------------ genera bozza (coordinatrice)
+let genPiano = null, genTimer = null;
+const genVista = (v) => {
+  $('gn-scelta').hidden = v !== 'scelta'; $('gn-calcolo').hidden = v !== 'calcolo'; $('gn-esito').hidden = v !== 'esito';
+  $('gn-avvia').hidden = v !== 'scelta'; $('gn-applica').hidden = v !== 'esito' || !genPiano?.righe.length;
+  $('gn-indietro').hidden = v !== 'esito'; $('gn-chiudi').hidden = v === 'calcolo';
+  $('gn-err').hidden = true;
+};
+const genErrore = (t) => { $('gn-err').textContent = t; $('gn-err').hidden = !t; };
+const genModo = () => document.querySelector('input[name="gn-modo"]:checked').value;
+$('btn-genera').onclick = () => {
+  if (stato.dati.month.status === 'published') { alert('Il mese è pubblicato: riportalo in bozza prima di generare un nuovo piano.'); return; }
+  genPiano = null;
+  const inAttesa = stato.richieste.filter((r) => r.status === 'pending').length;
+  $('gn-avviso').hidden = !inAttesa;
+  $('gn-avviso').textContent = inAttesa ? `Attenzione: ${inAttesa === 1 ? 'c\'è 1 richiesta ancora da esaminare' : `ci sono ${inAttesa} richieste ancora da esaminare`}. Le richieste non ancora accettate non vengono considerate.` : '';
+  genVista('scelta');
+  $('dlg-genera').showModal();
+};
+$('gn-chiudi').onclick = () => $('dlg-genera').close();
+$('gn-indietro').onclick = () => { genPiano = null; genVista('scelta'); };
+$('dlg-genera').addEventListener('cancel', (ev) => { if (!$('gn-calcolo').hidden) ev.preventDefault(); });
+$('gn-avvia').onclick = async () => {
+  const modo = genModo();
+  const { year: y, month: m } = { year: stato.y, month: stato.m };
+  const primo = `${y}-${pad(m)}-01`, ultimo = `${y}-${pad(m)}-${pad(new Date(y, m, 0).getDate())}`;
+  const delMese = stato.dati.shifts.filter((s) => s.date >= primo && s.date <= ultimo);
+  const daCancellare = delMese.filter((s) => ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested).length;
+  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}. Ferie, permessi, richieste accettate e malattie restano. Continuare?`)) return;
+  genVista('calcolo');
+  const t0 = Date.now();
+  $('gn-tempo').textContent = '';
+  genTimer = setInterval(() => { $('gn-tempo').textContent = `(${Math.round((Date.now() - t0) / 1000)} s)`; }, 1000);
+  try {
+    const sto = calcolaStorico(await stato.be.storicoPiano(y, m), y, m);
+    const dati = { year: y, month: m, staff: stato.dati.staff, shifts: delMese, prima: sto.prima, storico: sto.storico, weekendPrima: sto.weekendPrima, modalita: modo };
+    genPiano = await generaPiano(dati, { tempo: DEFAULT_TEMPO, risolvi: window.__risolviTest });
+    genPiano.modo = modo;
+    genMostra();
+  } catch (e) {
+    genPiano = null; genVista('scelta'); genErrore(messaggio(e));
+  } finally { clearInterval(genTimer); }
+};
+function genMostra() {
+  const r = genPiano.riepilogo;
+  const nSc = r.scoperti.length;
+  const gg = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+  const nomeTurno = { M: 'mattina', P: 'pomeriggio', N: 'notte' };
+  let h = nSc
+    ? `<p class="gn-ko">Attenzione: ${nSc === 1 ? '1 turno resta senza copertura giusta' : nSc + ' turni restano senza copertura giusta'}.</p><ul>${r.scoperti.map((x) => `<li>${gg(x.date)} ${nomeTurno[x.kind]}: ${x.persone ? x.persone + ' persone' : 'nessuno'}</li>`).join('')}</ul>`
+    : '<p class="gn-ok">Tutti i turni sono coperti, uno per turno.</p>';
+  h += '<table><thead><tr><th>Operatore</th><th>M</th><th>P</th><th>N</th><th>Totale</th><th>Weekend liberi</th></tr></thead><tbody>';
+  for (const p of r.persone) h += `<tr><td>${p.nome}${p.fisso ? ' (fisso)' : ''}</td><td>${p.M}</td><td>${p.P}</td><td>${p.N}</td><td>${p.totale}</td><td>${p.weekendLiberi === null ? '–' : p.weekendLiberi}</td></tr>`;
+  h += '</tbody></table>';
+  h += r.problemi.length
+    ? `<p><b>Regole non rispettate (il minimo indispensabile):</b></p><ul>${r.problemi.map((x) => `<li>${x}</li>`).join('')}</ul>`
+    : '<p class="gn-ok">Nessuna regola obbligatoria violata.</p>';
+  const dop = r.persone.reduce((a, p) => a + p.doppie, 0);
+  if (dop) h += `<p class="muted">Doppie notti: ${dop}.</p>`;
+  if (genPiano.modello.info.conflitti.length) h += '<p class="gn-ko">Alcune caselle già fissate si contraddicono tra loro: controlla il piano dopo averlo applicato.</p>';
+  h += genPiano.righe.length ? `<p class="muted">Se applichi, vengono scritte ${genPiano.righe.length} caselle. Potrai poi modificarle una a una con <i>Modifica</i>.</p>` : '<p class="muted">Non c\'è niente da scrivere.</p>';
+  $('gn-esito').innerHTML = h;
+  genVista('esito');
+}
+$('gn-applica').onclick = async () => {
+  if (!genPiano) return;
+  try {
+    $('gn-applica').disabled = true;
+    await stato.be.scriviPiano(stato.y, stato.m, genPiano.righe, genPiano.modo === 'tutto');
+    $('dlg-genera').close(); genPiano = null;
+    await carica();
+  } catch (e) { genErrore(messaggio(e)); } finally { $('gn-applica').disabled = false; }
+};
+
 // ------------------------------------------------------------ le ferie della coordinatrice
 $('btn-mie-ferie').onclick = () => {
   const oggi = oggiIso();
@@ -862,12 +938,20 @@ function apriPersona(p) {
   $('pe-email').disabled = bloccata; $('pe-email-nota').hidden = !bloccata;
   $('pe-inizio').value = p?.start_date || (p ? '' : oggiIso()); $('pe-fine').value = p?.end_date || '';
   $('pe-ore').value = p?.contract_hours ?? ''; $('pe-fisso').checked = !!p?.fixed_pattern;
+  for (let g = 0; g < 7; g++) $(`pe-gs-${g}`).value = p?.fixed_days?.[g] || '';
+  $('pe-schema').hidden = !$('pe-fisso').checked;
   const coord = p?.role === 'coordinator';
   $('pe-fine').disabled = coord || p?.user_id === stato.utente.staffId || p?.id === stato.utente.staffId;
   $('pe-elimina').hidden = !p || coord;
   $('dlg-persona').showModal();
 }
 $('personale-nuovo').onclick = () => apriPersona(null);
+$('pe-fisso').onchange = () => { $('pe-schema').hidden = !$('pe-fisso').checked; };
+function schemaFisso() {
+  const out = {};
+  if ($('pe-fisso').checked) for (let g = 0; g < 7; g++) { const v = $(`pe-gs-${g}`).value; if (v) out[g] = v; }
+  return out;
+}
 $('pe-annulla').onclick = () => $('dlg-persona').close();
 $('pe-salva').onclick = async () => {
   const nome = $('pe-nome').value.trim(), email = $('pe-email').value.trim().toLowerCase();
@@ -879,7 +963,7 @@ $('pe-salva').onclick = async () => {
   try {
     await stato.be.salvaPersona({
       id: personaCorrente?.id, name: nome, email, emailModificabile: !personaCorrente?.ha_accesso,
-      start_date: ini, end_date: fin, contract_hours: ore === '' ? null : +ore, fixed_pattern: $('pe-fisso').checked,
+      start_date: ini, end_date: fin, contract_hours: ore === '' ? null : +ore, fixed_pattern: $('pe-fisso').checked, fixed_days: schemaFisso(),
       sort_order: (Math.max(0, ...personale.map((p) => p.sort_order || 0)) || 0) + 10,
     });
     $('dlg-persona').close(); await elencaPersonale();

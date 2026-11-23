@@ -74,6 +74,7 @@
       <div class="azioni">
         <button id="btn-modifica" class="solo-coord" hidden>Modifica</button>
         <button id="btn-eventi" class="solo-coord" hidden>Eventi del mese</button>
+        <button id="btn-genera" class="solo-coord" hidden>Genera bozza</button>
         <button id="btn-pubblica" class="solo-coord" hidden>Pubblica</button>
         <button id="btn-richieste">Richieste</button>
         <button id="btn-mie-ferie" class="solo-coord" hidden>Le mie ferie</button>
@@ -183,6 +184,32 @@
     <div class="dlg-azioni"><button type="button" class="primario" id="mf-ok">Segna</button><span class="spazio"></span><button type="button" id="mf-chiudi">Chiudi</button></div>
   </dialog>
 
+  <!-- Genera bozza (coordinatrice) -->
+  <dialog id="dlg-genera" class="no-print">
+    <h2>Genera bozza</h2>
+    <div id="gn-scelta">
+      <p class="muted">Il programma propone M, P, N e i riposi del mese rispettando le regole del foglio turni. Ferie, permessi, richieste accettate e malattie non vengono mai toccati. Prima di applicare vedi un riepilogo e puoi ancora annullare.</p>
+      <p id="gn-avviso" class="muted" hidden></p>
+      <label class="gn-opz"><input type="radio" name="gn-modo" value="tutto" checked>
+        <span><b>Rifà tutto tranne le caselle protette</b><br>Cancella i turni e i riposi già scritti (anche a mano) e ricompone il mese da zero.</span></label>
+      <label class="gn-opz"><input type="radio" name="gn-modo" value="vuoti">
+        <span><b>Riempie solo le caselle vuote</b><br>Quello che c'è già resta com'è; il programma completa il resto attorno.</span></label>
+    </div>
+    <div id="gn-calcolo" hidden>
+      <p><b>Sto calcolando il piano…</b> <span id="gn-tempo"></span></p>
+      <p class="muted">Può servire fino a un minuto. Non chiudere la pagina.</p>
+    </div>
+    <div id="gn-esito" hidden></div>
+    <p id="gn-err" class="err" role="alert" hidden></p>
+    <div class="dlg-azioni">
+      <button type="button" class="primario" id="gn-avvia">Genera</button>
+      <button type="button" class="primario" id="gn-applica" hidden>Applica al piano</button>
+      <button type="button" id="gn-indietro" hidden>Cambia modalità</button>
+      <span class="spazio"></span>
+      <button type="button" id="gn-chiudi">Chiudi</button>
+    </div>
+  </dialog>
+
   <!-- Comunica malattia (operatore) -->
   <dialog id="dlg-malattia" class="no-print">
     <h2>Comunica malattia</h2>
@@ -283,6 +310,10 @@
         <label>Ultimo giorno in servizio<input id="pe-fine" type="date"></label>
         <label>Ore di contratto al mese<input id="pe-ore" type="number" min="0" max="300" step="0.5"></label>
         <label class="check"><input type="checkbox" id="pe-fisso"> Turni fissi (come Andrea)</label>
+        <div id="pe-schema" hidden>
+          <p class="muted">Lo schema che si ripete ogni settimana: il generatore lo mette come dato fisso. Dopo una notte il riposo obbligatorio si aggiunge da solo. Se ha ferie o permessi, questi prendono il posto dello schema.</p>
+          <div class="schema-sett"><label class="gs">Lunedì<select id="pe-gs-1"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label><label class="gs">Martedì<select id="pe-gs-2"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label><label class="gs">Mercoledì<select id="pe-gs-3"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label><label class="gs">Giovedì<select id="pe-gs-4"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label><label class="gs">Venerdì<select id="pe-gs-5"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label><label class="gs">Sabato<select id="pe-gs-6"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label><label class="gs">Domenica<select id="pe-gs-0"><option value="">—</option><option value="M">Mattina</option><option value="P">Pomeriggio</option><option value="N">Notte</option></select></label></div>
+        </div>
       </div>
       <p id="persona-err" class="err" role="alert" hidden></p>
       <div class="dlg-azioni">

@@ -283,3 +283,18 @@ table.foglio td.in-attesa.critica { outline-color: #b58900; background-color: #f
 .pannello-notifiche li .muted { font-size: 12px; }
 .pannello-notifiche li.vuota { color: #777; justify-content: center; padding: 22px 14px; }
 .pn-az { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
+
+/* schema settimanale dei turni fissi (Gestione personale) */
+.schema-sett { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 12px; margin-top: 6px; }
+.schema-sett label.gs { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.schema-sett select { width: 100%; }
+
+/* genera bozza */
+.gn-opz { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; margin: 8px 0; cursor: pointer; }
+.gn-opz input { margin-top: 4px; }
+#gn-esito table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; }
+#gn-esito th, #gn-esito td { border: 1px solid #ccc; padding: 3px 6px; text-align: center; }
+#gn-esito th:first-child, #gn-esito td:first-child { text-align: left; }
+#gn-esito ul { margin: 6px 0; padding-left: 20px; font-size: 14px; }
+#gn-esito .gn-ok { color: #1a6b2f; font-weight: 600; }
+#gn-esito .gn-ko { color: #b00020; font-weight: 600; }

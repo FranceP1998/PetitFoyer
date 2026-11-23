@@ -31,6 +31,14 @@ do $$ begin
     update public.staff set senza_weekend = true where role = 'coordinator';
   end if;
 end $$;
+-- schema settimanale di chi ha i turni fissi: giorno della settimana (0 = domenica ... 6 = sabato) -> M, P o N.
+-- Lo scrive la coordinatrice in Gestione personale; il generatore lo usa come dato fisso.
+do $$ begin
+  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'staff' and column_name = 'fixed_days') then
+    alter table public.staff add column fixed_days jsonb not null default '{}'::jsonb;
+    update public.staff set fixed_days = '{"2":"P","4":"M","6":"N"}'::jsonb where fixed_pattern and name = 'Andrea';
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- 2. Mesi (bozza / pubblicato) e osservazioni
@@ -408,7 +416,7 @@ create policy unlocks_select on public.unlocks
 --     le leggerà tramite una funzione dedicata.
 -- ---------------------------------------------------------------------
 revoke select on public.staff from anon, authenticated;
-grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date, senza_weekend) on public.staff to authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date, senza_weekend, fixed_days) on public.staff to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 11. Registrazione consentita SOLO alle email scritte nella tabella staff
@@ -492,10 +500,12 @@ create trigger staff_protect_trg
   for each row execute function public.staff_protect();
 
 -- Elenco completo (con email e ore di contratto): lo vede solo la coordinatrice
+drop function if exists public.elenco_personale();
 create or replace function public.elenco_personale()
 returns table (
   id bigint, name text, email text, role text, sort_order int, active boolean,
-  fixed_pattern boolean, contract_hours numeric, start_date date, end_date date, ha_accesso boolean
+  fixed_pattern boolean, contract_hours numeric, start_date date, end_date date, ha_accesso boolean,
+  senza_weekend boolean, fixed_days jsonb
 )
 language sql
 stable
@@ -503,7 +513,7 @@ security definer
 set search_path = public
 as $$
   select s.id, s.name, s.email, s.role, s.sort_order, s.active, s.fixed_pattern,
-         s.contract_hours, s.start_date, s.end_date, (s.user_id is not null)
+         s.contract_hours, s.start_date, s.end_date, (s.user_id is not null), s.senza_weekend, s.fixed_days
     from public.staff s
    where public.is_coordinator()
    order by s.sort_order, s.name;
@@ -522,7 +532,7 @@ grant usage on schema public to anon, authenticated;
 revoke all on public.staff, public.months, public.shifts, public.events, public.unlocks, public.keepalive from anon, authenticated;
 grant select, insert, update, delete on public.months, public.shifts, public.events to authenticated;
 grant select on public.unlocks to authenticated;
-grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date, senza_weekend) on public.staff to authenticated;
+grant select (id, name, role, sort_order, active, fixed_pattern, user_id, start_date, end_date, senza_weekend, fixed_days) on public.staff to authenticated;
 grant insert, update, delete on public.staff to authenticated;
 
 -- ---------------------------------------------------------------------
@@ -1179,13 +1189,43 @@ begin
 end;
 $$;
 
+-- Scrive nel mese il piano proposto dal generatore (bozza). Tutto in una volta: o va tutto o non cambia niente.
+-- p_sostituisci = true: prima toglie M, P, N e R non richiesti del mese (ferie, permessi, richieste accettate, malattie,
+-- coperture e il resto restano); false: aggiunge soltanto, il generatore ha già lasciato fuori le caselle occupate.
+create or replace function public.scrivi_piano(p_year int, p_month int, p_righe jsonb, p_sostituisci boolean)
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_da date := make_date(p_year, p_month, 1); v_a date := (make_date(p_year, p_month, 1) + interval '1 month - 1 day')::date; v_n int := 0;
+begin
+  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  if exists (select 1 from public.months where year = p_year and month = p_month and status = 'published') then
+    raise exception 'Il mese è già pubblicato: non si può generare di nuovo.' using errcode = '22023';
+  end if;
+  if p_sostituisci then
+    delete from public.shifts where date between v_da and v_a and kind in ('M','P','N','R') and not requested
+      and not exists (select 1 from public.shifts mu where mu.staff_id = shifts.staff_id and mu.date = shifts.date and mu.kind = 'MU');
+  end if;
+  insert into public.shifts (staff_id, date, kind, requested)
+  select (r->>'staff_id')::bigint, (r->>'date')::date, r->>'kind', false
+    from jsonb_array_elements(p_righe) r
+   where (r->>'date')::date between v_da and v_a and r->>'kind' in ('M','P','N','R')
+     and exists (select 1 from public.staff s where s.id = (r->>'staff_id')::bigint)
+  on conflict (staff_id, date, kind) do nothing;
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
 -- (niente più apertura manuale da parte di Marie)
 drop function if exists public.imposta_richieste(int, int, boolean);
 
 revoke all on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean, date), public.annulla_richiesta(bigint),
-  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.mie_ferie(date, date, text) from public;
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.mie_ferie(date, date, text), public.scrivi_piano(int, int, jsonb, boolean) from public;
 grant execute on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean, date), public.annulla_richiesta(bigint),
-  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.mie_ferie(date, date, text) to authenticated;
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.mie_ferie(date, date, text), public.scrivi_piano(int, int, jsonb, boolean) to authenticated;
 
 -- Tutti i membri del personale vedono tutte le richieste
 alter table public.requests enable row level security;

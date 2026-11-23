@@ -67,7 +67,7 @@ function backendDemo() {
       return [...db.staff].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map((p) => ({ email: p.email || `${p.name.toLowerCase()}@esempio.it`, contract_hours: null, start_date: null, end_date: null, ha_accesso: true, ...p }));
     },
     async salvaPersona(p) {
-      const campi = { name: p.name, email: p.email || null, fixed_pattern: !!p.fixed_pattern, contract_hours: p.contract_hours ?? null, start_date: p.start_date || null, end_date: p.end_date || null, sort_order: p.sort_order };
+      const campi = { name: p.name, email: p.email || null, fixed_pattern: !!p.fixed_pattern, fixed_days: p.fixed_days || {}, contract_hours: p.contract_hours ?? null, start_date: p.start_date || null, end_date: p.end_date || null, sort_order: p.sort_order };
       if (p.id) { Object.assign(db.staff.find((x) => x.id === p.id), campi); }
       else { db.staff.push({ id: Math.max(0, ...db.staff.map((x) => x.id)) + 1, role: 'operator', active: true, ...campi }); }
       salva();
@@ -169,6 +169,26 @@ function backendDemo() {
       salva(); return r.id;
     },
     // ferie e permessi della coordinatrice: le segna lei, senza approvazione
+    async storicoPiano(y, m) {
+      const primo = iso(y, m, 1), gen = iso(y, 1, 1);
+      return db.shifts.filter((s) => s.date >= gen && s.date < primo && ['M', 'P', 'N'].includes(s.kind)).map((s) => ({ staff_id: s.staff_id, date: s.date, kind: s.kind }));
+    },
+    async scriviPiano(y, m, righe, sostituisci) {
+      if ((db.monthsState?.[`${y}-${m}`] || { status: 'draft' }).status === 'published') throw new Error('Il mese è già pubblicato: non si può generare di nuovo.');
+      const da = iso(y, m, 1), a = iso(y, m, giorniDelMese(y, m));
+      if (sostituisci) {
+        const mu = new Set(db.shifts.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
+        db.shifts = db.shifts.filter((s) => !(s.date >= da && s.date <= a && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !mu.has(`${s.staff_id}|${s.date}`)));
+      }
+      let n = 0;
+      for (const r of righe) {
+        if (r.date < da || r.date > a || !['M', 'P', 'N', 'R'].includes(r.kind)) continue;
+        if (db.shifts.some((s) => s.staff_id === r.staff_id && s.date === r.date && s.kind === r.kind)) continue;
+        db.shifts.push({ id: nextId++, staff_id: r.staff_id, date: r.date, kind: r.kind, requested: false, start_time: null, end_time: null }); n++;
+      }
+      salva();
+      return n;
+    },
     async mieFerie(da, a, kind = 'F') {
       const u = utente();
       controllaFerie(db, u.staffId, da, a);
@@ -335,7 +355,7 @@ async function backendSupabase() {
     // ---- gestione personale (solo coordinatrice: lo garantisce il database)
     async elencoPersonale() { return errore(await sb.rpc('elenco_personale')); },
     async salvaPersona(p) {
-      const campi = { name: p.name, email: p.email || null, fixed_pattern: !!p.fixed_pattern, contract_hours: p.contract_hours ?? null, start_date: p.start_date || null, end_date: p.end_date || null };
+      const campi = { name: p.name, email: p.email || null, fixed_pattern: !!p.fixed_pattern, fixed_days: p.fixed_days || {}, contract_hours: p.contract_hours ?? null, start_date: p.start_date || null, end_date: p.end_date || null };
       if (p.id) {
         if (!p.emailModificabile) delete campi.email;
         errore(await sb.from('staff').update(campi).eq('id', p.id));
@@ -348,7 +368,7 @@ async function backendSupabase() {
     async caricaMese(y, m) {
       const { da, a } = intervallo(y, m);
       const [staff, shifts, events, mese] = await Promise.all([
-        sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active,start_date,end_date,senza_weekend').then(errore),
+        sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active,start_date,end_date,senza_weekend,fixed_days').then(errore),
         sb.from('shifts').select('id,staff_id,date,kind,requested,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('events').select('id,date,kind,label,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('months').select('year,month,status,notes').eq('year', y).eq('month', m).maybeSingle().then(errore),
@@ -411,6 +431,18 @@ async function backendSupabase() {
     },
     async elaboraScadenze() { return errore(await sb.rpc('elabora_scadenze')); },
     async inviaRichiesta(date, kind, conferma = false, fine = null) { return errore(await sb.rpc('invia_richiesta', { p_date: date, p_kind: kind, p_conferma: conferma, p_fine: fine || null })); },
+    async storicoPiano(y, m) {
+      const primo = iso(y, m, 1), gen = iso(y, 1, 1), out = [];
+      for (let da = 0; ; da += 1000) {
+        const r = errore(await sb.from('shifts').select('staff_id,date,kind').in('kind', ['M', 'P', 'N']).gte('date', gen).lt('date', primo).order('date').range(da, da + 999));
+        out.push(...r);
+        if (r.length < 1000) break;
+      }
+      return out;
+    },
+    async scriviPiano(y, m, righe, sostituisci) {
+      return errore(await sb.rpc('scrivi_piano', { p_year: y, p_month: m, p_righe: righe.map((r) => ({ staff_id: r.staff_id, date: r.date, kind: r.kind })), p_sostituisci: !!sostituisci }));
+    },
     async mieFerie(da, a, kind = 'F') { errore(await sb.rpc('mie_ferie', { p_da: da, p_a: a, p_kind: kind })); },
     async annullaRichiesta(id) { errore(await sb.rpc('annulla_richiesta', { p_id: id })); },
     async rispondiRichiesta(id, accetta, motivo = '') { errore(await sb.rpc('rispondi_richiesta', { p_id: id, p_accetta: accetta, p_motivo: motivo || null })); },
