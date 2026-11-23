@@ -312,3 +312,5 @@ table.foglio td.in-attesa.critica { outline-color: #b58900; background-color: #f
 .fe-nuova input[type=date] { padding: 8px 10px; border: 1px solid #c9c7c0; border-radius: 10px; }
 #fe-conti { margin-top: 8px; font-size: 13px; }
 @media (max-width: 560px) { .fe-riga { grid-template-columns: 1fr 1fr 1fr; } .fe-riga .fe-nome { grid-column: 1 / -1; } }
+.fe-rinomina { display: block; width: 100%; margin-top: 3px; padding: 6px 8px; border: 1px solid transparent; border-bottom-color: #c9c7c0; border-radius: 6px; font-size: 14px; background: transparent; }
+.fe-rinomina:hover, .fe-rinomina:focus { border-color: #c9c7c0; background: #fff; }

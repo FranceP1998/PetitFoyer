@@ -14,6 +14,7 @@ const piu = (data, n) => { const x = new Date(`${data}T12:00:00Z`); x.setUTCDate
 export function festivitaPredefinite(y) {
   const p = pasqua(y);
   return [
+    { date: `${y}-01-01`, label: 'Capodanno' },
     { date: `${y}-01-06`, label: 'Epifania' },
     { date: p, label: 'Pasqua' },
     { date: piu(p, 1), label: 'Pasquetta' },
@@ -23,6 +24,6 @@ export function festivitaPredefinite(y) {
     { date: `${y}-08-15`, label: 'Ferragosto' },
     { date: `${y}-12-24`, label: 'Vigilia di Natale' },
     { date: `${y}-12-25`, label: 'Natale' },
-    { date: `${y}-12-31`, label: 'San Silvestro' },
+    { date: `${y}-12-31`, label: "Ultimo dell'anno" },
   ];
 }

@@ -130,7 +130,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v31`;
+  $('utente').textContent = `${stato.utente.name} · v32`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -652,7 +652,7 @@ function feDisegna() {
   let h = '<div class="fe-riga fe-intest"><span>Festività</span><span>Mattina</span><span>Pomeriggio</span><span>Notte</span><span></span></div>';
   for (const g of feStato.dati.giorni) {
     const gs = GIORNI_SETT[new Date(`${g.date}T12:00:00Z`).getUTCDay()];
-    h += `<div class="fe-riga"><div class="fe-nome"><b>${g.date.slice(8, 10)}/${g.date.slice(5, 7)}</b> ${esc(g.label)}<small>${gs}</small></div>${sel(g.date, 'M')}${sel(g.date, 'P')}${sel(g.date, 'N')}<button type="button" class="link" data-togli="${g.date}">Togli</button></div>`;
+    h += `<div class="fe-riga"><div class="fe-nome"><b>${g.date.slice(8, 10)}/${g.date.slice(5, 7)}</b> <small>${gs}</small><input type="text" class="fe-rinomina" data-nome="${g.date}" value="${esc(g.label)}" maxlength="60" aria-label="Nome della festività del ${g.date.slice(8, 10)}/${g.date.slice(5, 7)}"></div>${sel(g.date, 'M')}${sel(g.date, 'P')}${sel(g.date, 'N')}<button type="button" class="link" data-togli="${g.date}">Togli</button></div>`;
   }
   if (!feStato.dati.giorni.length) h += '<p class="muted">Nessuna festività per quest\'anno. Aggiungi quelle predefinite o inserisci una data.</p>';
   $('fe-lista').innerHTML = h;
@@ -674,6 +674,16 @@ $('fe-next').onclick = async () => { feStato.y++; feErrore(''); try { await feCa
 $('fe-chiudi').onclick = () => $('dlg-festivita').close();
 $('dlg-festivita').addEventListener('close', () => { carica(); });
 $('fe-lista').addEventListener('change', async (ev) => {
+  const nome = ev.target.closest('input[data-nome]');
+  if (nome) {
+    // rinomina: il nome cambia, i turni assegnati restano com'erano
+    const data = nome.dataset.nome, scelte = {};
+    for (const k of ['M', 'P', 'N']) { const v = $('fe-lista').querySelector(`select[data-d="${data}"][data-k="${k}"]`).value; if (v) scelte[k] = +v; }
+    feErrore('');
+    try { await stato.be.impostaFestivita(data, nome.value.trim() || 'Festività', scelte); } catch (e) { feErrore(messaggio(e)); }
+    try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
+    return;
+  }
   const s = ev.target.closest('select[data-d]'); if (!s) return;
   const data = s.dataset.d, scelte = {};
   for (const k of ['M', 'P', 'N']) { const v = $('fe-lista').querySelector(`select[data-d="${data}"][data-k="${k}"]`).value; if (v) scelte[k] = +v; }
