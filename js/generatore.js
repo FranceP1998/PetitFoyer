@@ -88,10 +88,10 @@ export function costruisciModello(dati) {
       for (const r of rr) {
         if (ASSENZE.includes(r.kind)) st.assente = true;
         if (r.kind === 'T1018') st.occupato = true;
-        if (TURNI.includes(r.kind) && (r.requested || haMalattia || fermo)) st.lavoro = r.kind;
-        // turni "stabiliti": richiesti e accettati, di malattia, o decisi dal mese prima / dal mese dopo già pubblicato.
+        if (TURNI.includes(r.kind) && (r.requested || r.festivo || haMalattia || fermo)) st.lavoro = r.kind;
+        // turni "stabiliti": richiesti e accettati, assegnati nella riunione delle festività, di malattia, o decisi dal mese prima / dal mese dopo già pubblicato.
         // Non li sceglie il generatore: se tra loro creano un conflitto, il conflitto non gli va attribuito.
-        if (TURNI.includes(r.kind) && (r.requested || haMalattia || d === 1 || (dati.anticipoBloccato && d === DX))) st.stab = true;
+        if (TURNI.includes(r.kind) && (r.requested || r.festivo || haMalattia || d === 1 || (dati.anticipoBloccato && d === DX))) st.stab = true;
         if (r.kind === 'R' && !r.requested && fermo) st.assente = true;
       }
       stato[p.id][d] = st;
@@ -393,7 +393,7 @@ export function leggiSoluzione(m, valori, dati) {
   // nella modalità "rifà tutto" le righe non richieste (e senza malattia) vengono cancellate prima di scrivere: non contano come già presenti
   const malati = new Set((dati.shifts || []).filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
   const primoGiorno = dataDi(1);
-  const resta = (dati.shifts || []).filter((s) => modalita === 'vuoti' || s.date === primoGiorno || s.requested || malati.has(`${s.staff_id}|${s.date}`) || !['M', 'P', 'N', 'R'].includes(s.kind));
+  const resta = (dati.shifts || []).filter((s) => modalita === 'vuoti' || s.date === primoGiorno || s.requested || s.festivo || malati.has(`${s.staff_id}|${s.date}`) || !['M', 'P', 'N', 'R'].includes(s.kind));
   const esistenti = new Set(resta.map((s) => `${s.staff_id}|${s.date}|${s.kind}`));
   const haRiga = new Set(resta.map((s) => `${s.staff_id}|${s.date}`));
   const righe = [];

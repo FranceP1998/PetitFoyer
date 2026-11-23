@@ -298,3 +298,17 @@ table.foglio td.in-attesa.critica { outline-color: #b58900; background-color: #f
 #gn-esito ul { margin: 6px 0; padding-left: 20px; font-size: 14px; }
 #gn-esito .gn-ok { color: #1a6b2f; font-weight: 600; }
 #gn-esito .gn-ko { color: #b00020; font-weight: 600; }
+
+/* festività */
+.fe-anno { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0; }
+.fe-anno button { width: 36px; height: 36px; border-radius: 10px; }
+.fe-lista { display: grid; gap: 6px; max-height: 46vh; overflow: auto; }
+.fe-riga { display: grid; grid-template-columns: minmax(110px, 1.3fr) repeat(3, minmax(78px, 1fr)) auto; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px solid #e4e2db; }
+.fe-riga .fe-nome small { display: block; color: #6b6a64; }
+.fe-riga select { width: 100%; padding: 7px 6px; border: 1px solid #c9c7c0; border-radius: 8px; font-size: 14px; }
+.fe-riga.fe-intest { font-size: 12px; color: #6b6a64; border-bottom: 2px solid #c9c7c0; }
+.fe-nuova { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 6px; }
+.fe-nuova input[type=text] { flex: 1 1 140px; padding: 8px 10px; border: 1px solid #c9c7c0; border-radius: 10px; }
+.fe-nuova input[type=date] { padding: 8px 10px; border: 1px solid #c9c7c0; border-radius: 10px; }
+#fe-conti { margin-top: 8px; font-size: 13px; }
+@media (max-width: 560px) { .fe-riga { grid-template-columns: 1fr 1fr 1fr; } .fe-riga .fe-nome { grid-column: 1 / -1; } }

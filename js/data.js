@@ -182,7 +182,7 @@ function backendDemo() {
       const a = dopoPubblicato ? iso(y, m, giorniDelMese(y, m)) : iso(dopo.y, dopo.m, 1);
       if (sostituisci) {
         const mu = new Set(db.shifts.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
-        db.shifts = db.shifts.filter((s) => !(s.date > da && s.date <= a && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !mu.has(`${s.staff_id}|${s.date}`)));
+        db.shifts = db.shifts.filter((s) => !(s.date > da && s.date <= a && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !s.festivo && !mu.has(`${s.staff_id}|${s.date}`)));
       }
       let n = 0;
       for (const r of righe) {
@@ -233,7 +233,7 @@ function backendDemo() {
         staff: db.staff,
         shifts: db.shifts.filter((s) => s.date >= da && s.date <= a
           && (utente().role === 'coordinator' || (db.monthsState?.[`${y}-${m}`] || mese).status === 'published'
-              || ['RR', 'F', 'FS', 'PERM'].includes(s.kind) || s.requested)),
+              || ['RR', 'F', 'FS', 'PERM'].includes(s.kind) || s.requested || s.festivo)),
         events: db.events.filter((e) => e.date >= da && e.date <= a),
       };
     },
@@ -250,6 +250,52 @@ function backendDemo() {
       db.shifts = db.shifts.filter((s) => !tolti.has(s));
       const rimasti = new Set(db.shifts.filter((s) => s.staff_id === staffId && s.date === data).map((s) => s.kind));
       for (const v of voci) if (!rimasti.has(v.kind)) db.shifts.push({ id: nextId++, staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null });
+      salva();
+    },
+    // --- festività: date scelte dalla coordinatrice e turni assegnati nella riunione (fissi e sempre visibili) ---
+    async elencaFestivita(y) {
+      const da = `${y}-01-01`, a = `${y}-12-31`;
+      return {
+        giorni: (db.holidays || []).filter((h) => h.date >= da && h.date <= a).sort((x, z) => x.date.localeCompare(z.date)),
+        turni: db.shifts.filter((s) => s.festivo && s.date >= da && s.date <= a).map((s) => ({ staff_id: s.staff_id, date: s.date, kind: s.kind })),
+      };
+    },
+    async impostaFestivita(data, etichetta, scelte = {}) {
+      if (utente().role !== 'coordinator') throw new Error('Solo la coordinatrice.');
+      const mese = (db.monthsState?.[`${+data.slice(0, 4)}-${+data.slice(5, 7)}`] || (+data.slice(0, 4) === DEMO.month.year && +data.slice(5, 7) === DEMO.month.month ? DEMO.month : { status: 'draft' }));
+      if (mese.status === 'published') throw new Error('Il mese è già pubblicato: riportalo in bozza per cambiare i turni della festività.');
+      const ids = ['M', 'P', 'N'].map((k) => scelte[k] || null);
+      if (ids.some((x, i) => x && ids.indexOf(x) !== i)) throw new Error('Una persona non può fare due turni nello stesso giorno.');
+      const nome = (id) => db.staff.find((p) => p.id === id)?.name || '';
+      const sul = (k) => db.shifts.filter((s) => s.date === data && s.kind === k);
+      // controlli prima di scrivere
+      for (const k of ['M', 'P', 'N']) {
+        const id = scelte[k]; if (!id) continue;
+        if (db.shifts.some((s) => s.staff_id === id && s.date === data && ['F', 'FS', 'PERM', 'RR', 'MU'].includes(s.kind))) throw new Error(`${nome(id)} ha ferie, permesso, riposo richiesto o malattia il ${data.slice(8, 10)}/${data.slice(5, 7)}.`);
+        const altro = sul(k).find((s) => s.requested && s.staff_id !== id);
+        if (altro) throw new Error(`Il turno è già richiesto da ${nome(altro.staff_id)} il ${data.slice(8, 10)}/${data.slice(5, 7)}.`);
+        if (db.shifts.some((s) => s.staff_id === id && s.date === data && ['M', 'P', 'N'].includes(s.kind) && s.kind !== k && s.requested)) throw new Error(`${nome(id)} ha già un altro turno richiesto il ${data.slice(8, 10)}/${data.slice(5, 7)}.`);
+        if (db.shifts.some((s) => s.staff_id === id && s.date === data && s.kind === 'T1018')) throw new Error(`${nome(id)} ha già il turno 10-18 il ${data.slice(8, 10)}/${data.slice(5, 7)}.`);
+      }
+      db.holidays = db.holidays || [];
+      const h = db.holidays.find((x) => x.date === data);
+      if (h) { if (etichetta != null) h.label = etichetta; } else db.holidays.push({ date: data, label: etichetta || '' });
+      db.shifts = db.shifts.filter((s) => !(s.date === data && s.festivo && ['M', 'P', 'N'].includes(s.kind)));
+      for (const k of ['M', 'P', 'N']) {
+        const id = scelte[k]; if (!id) continue;
+        db.shifts = db.shifts.filter((s) => !(s.date === data && !s.requested && ((s.kind === k && s.staff_id !== id) || (s.staff_id === id && (s.kind === 'R' || (['M', 'P', 'N'].includes(s.kind) && s.kind !== k))))));
+        const es = db.shifts.find((s) => s.staff_id === id && s.date === data && s.kind === k);
+        if (es) es.festivo = true;
+        else db.shifts.push({ id: nextId++, staff_id: id, date: data, kind: k, requested: false, festivo: true, start_time: null, end_time: null });
+      }
+      salva();
+    },
+    async togliFestivita(data) {
+      if (utente().role !== 'coordinator') throw new Error('Solo la coordinatrice.');
+      const mese = (db.monthsState?.[`${+data.slice(0, 4)}-${+data.slice(5, 7)}`] || (+data.slice(0, 4) === DEMO.month.year && +data.slice(5, 7) === DEMO.month.month ? DEMO.month : { status: 'draft' }));
+      if (mese.status === 'published') throw new Error('Il mese è già pubblicato: riportalo in bozza per togliere la festività.');
+      for (const s of db.shifts) if (s.date === data && s.festivo) s.festivo = false;
+      db.holidays = (db.holidays || []).filter((h) => h.date !== data);
       salva();
     },
     async impostaOrario(staffId, data, kind, inizio, fine) {
@@ -373,7 +419,7 @@ async function backendSupabase() {
       const { da, a } = intervallo(y, m);
       const [staff, shifts, events, mese] = await Promise.all([
         sb.from('staff').select('id,name,role,sort_order,fixed_pattern,active,start_date,end_date,senza_weekend,fixed_days').then(errore),
-        sb.from('shifts').select('id,staff_id,date,kind,requested,start_time,end_time').gte('date', da).lte('date', a).then(errore),
+        sb.from('shifts').select('id,staff_id,date,kind,requested,festivo,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('events').select('id,date,kind,label,start_time,end_time').gte('date', da).lte('date', a).then(errore),
         sb.from('months').select('year,month,status,notes').eq('year', y).eq('month', m).maybeSingle().then(errore),
       ]);
@@ -395,6 +441,18 @@ async function backendSupabase() {
         errore(await sb.from('shifts').insert(daAggiungere.map((v) => ({ staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null }))));
       }
     },
+    async elencaFestivita(y) {
+      const da = `${y}-01-01`, a = `${y}-12-31`;
+      const [giorni, turni] = await Promise.all([
+        sb.from('holidays').select('date,label').gte('date', da).lte('date', a).order('date').then(errore),
+        sb.from('shifts').select('staff_id,date,kind').eq('festivo', true).gte('date', da).lte('date', a).then(errore),
+      ]);
+      return { giorni, turni };
+    },
+    async impostaFestivita(data, etichetta, scelte = {}) {
+      errore(await sb.rpc('imposta_festivita', { p_date: data, p_label: etichetta ?? null, p_m: scelte.M || null, p_p: scelte.P || null, p_n: scelte.N || null }));
+    },
+    async togliFestivita(data) { errore(await sb.rpc('togli_festivita', { p_date: data })); },
     async impostaOrario(staffId, data, kind, inizio, fine) {
       errore(await sb.from('shifts').update({ start_time: inizio, end_time: fine }).eq('staff_id', staffId).eq('date', data).eq('kind', kind));
     },

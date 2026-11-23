@@ -84,6 +84,8 @@ create table if not exists public.shifts (
 );
 -- (le righe seguenti rendono il file rieseguibile anche su un database già creato con la versione precedente)
 alter table public.shifts add column if not exists start_time time;
+-- turno assegnato nella riunione delle festività: fisso (il generatore e "Pulisci calendario" non lo toccano) e sempre visibile a tutti
+alter table public.shifts add column if not exists festivo boolean not null default false;
 alter table public.shifts add column if not exists end_time   time;
 alter table public.shifts drop constraint if exists shifts_kind_check;
 alter table public.shifts add constraint shifts_kind_check
@@ -1211,7 +1213,7 @@ begin
     v_a := v_a + 1;
   end if;
   if p_sostituisci then
-    delete from public.shifts where date between v_da + 1 and v_a and kind in ('M','P','N','R') and not requested
+    delete from public.shifts where date between v_da + 1 and v_a and kind in ('M','P','N','R') and not requested and not festivo
       and not exists (select 1 from public.shifts mu where mu.staff_id = shifts.staff_id and mu.date = shifts.date and mu.kind = 'MU');
   end if;
   insert into public.shifts (staff_id, date, kind, requested)
@@ -1224,6 +1226,85 @@ begin
   return v_n;
 end;
 $$;
+
+-- ------------------------------------------------------------------------------------------------------------------
+-- Festività (Natale, Pasqua, ...): date scelte dalla coordinatrice e turni assegnati nella riunione.
+-- I turni assegnati sono righe M/P/N con festivo = true: restano fissi quando si genera il mese e li vedono tutti.
+create table if not exists public.holidays (
+  date  date primary key,
+  label text not null default ''
+);
+alter table public.holidays enable row level security;
+drop policy if exists holidays_select on public.holidays;
+create policy holidays_select on public.holidays for select to authenticated using (public.is_staff_member());
+revoke all on public.holidays from anon, authenticated;
+grant select on public.holidays to authenticated;
+
+-- Imposta (o crea) una festività e chi fa mattina, pomeriggio e notte; un'assegnazione vuota (null) lascia quel turno libero.
+create or replace function public.imposta_festivita(p_date date, p_label text, p_m bigint, p_p bigint, p_n bigint)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_k text; v_s bigint; v_nome text; v_chi text;
+begin
+  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  if exists (select 1 from public.months where year = extract(year from p_date)::int and month = extract(month from p_date)::int and status = 'published') then
+    raise exception 'Il mese è già pubblicato: riportalo in bozza per cambiare i turni della festività.' using errcode = '22023';
+  end if;
+  if (p_m is not null and (p_m = p_p or p_m = p_n)) or (p_p is not null and p_p = p_n) then
+    raise exception 'Una persona non può fare due turni nello stesso giorno.' using errcode = '22023';
+  end if;
+  insert into public.holidays (date, label) values (p_date, coalesce(p_label, ''))
+    on conflict (date) do update set label = case when p_label is null then public.holidays.label else excluded.label end;
+  delete from public.shifts where date = p_date and kind in ('M','P','N') and festivo;
+  for v_k, v_s in select * from (values ('M', p_m), ('P', p_p), ('N', p_n)) t(k, s) loop
+    continue when v_s is null;
+    select name into v_nome from public.staff where id = v_s and role = 'operator';
+    if v_nome is null then raise exception 'Operatore non trovato.' using errcode = '22023'; end if;
+    if exists (select 1 from public.shifts where staff_id = v_s and date = p_date and kind in ('F','FS','PERM','RR','MU')) then
+      raise exception '% ha ferie, permesso, riposo richiesto o malattia il %.', v_nome, to_char(p_date, 'DD/MM') using errcode = '22023';
+    end if;
+    select st.name into v_chi from public.shifts sh join public.staff st on st.id = sh.staff_id
+     where sh.date = p_date and sh.kind = v_k and sh.requested and sh.staff_id <> v_s limit 1;
+    if v_chi is not null then raise exception 'Il turno è già richiesto da % il %.', v_chi, to_char(p_date, 'DD/MM') using errcode = '22023'; end if;
+    if exists (select 1 from public.shifts where staff_id = v_s and date = p_date and kind in ('M','P','N') and kind <> v_k and requested) then
+      raise exception '% ha già un altro turno richiesto il %.', v_nome, to_char(p_date, 'DD/MM') using errcode = '22023';
+    end if;
+    if exists (select 1 from public.shifts where staff_id = v_s and date = p_date and kind = 'T1018') then
+      raise exception '% ha già il turno 10-18 il %.', v_nome, to_char(p_date, 'DD/MM') using errcode = '22023';
+    end if;
+    delete from public.shifts where date = p_date and kind = v_k and not requested and staff_id <> v_s;
+    -- gli altri turni generati e il riposo obbligato di quel giorno lasciano il posto alla festività
+    delete from public.shifts where staff_id = v_s and date = p_date and kind in ('M','P','N') and kind <> v_k and not requested;
+    delete from public.shifts where staff_id = v_s and date = p_date and kind = 'R' and not requested;
+    insert into public.shifts (staff_id, date, kind, requested, festivo) values (v_s, p_date, v_k, false, true)
+      on conflict (staff_id, date, kind) do update set festivo = true;
+  end loop;
+end;
+$$;
+
+-- Toglie la festività dall'elenco; i turni già assegnati restano nel foglio come turni normali (il generatore può cambiarli).
+create or replace function public.togli_festivita(p_date date)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  if exists (select 1 from public.months where year = extract(year from p_date)::int and month = extract(month from p_date)::int and status = 'published') then
+    raise exception 'Il mese è già pubblicato: riportalo in bozza per togliere la festività.' using errcode = '22023';
+  end if;
+  update public.shifts set festivo = false where date = p_date and festivo;
+  delete from public.holidays where date = p_date;
+end;
+$$;
+
+revoke all on function public.imposta_festivita(date, text, bigint, bigint, bigint), public.togli_festivita(date) from public;
+grant execute on function public.imposta_festivita(date, text, bigint, bigint, bigint), public.togli_festivita(date) to authenticated;
 
 -- (niente più apertura manuale da parte di Marie)
 drop function if exists public.imposta_richieste(int, int, boolean);
@@ -1250,4 +1331,4 @@ create policy shifts_select on public.shifts
   for select to authenticated
   using (public.is_coordinator()
          or (public.is_staff_member()
-             and (public.is_published(date) or kind in ('RR','F','FS','PERM') or requested)));
+             and (public.is_published(date) or kind in ('RR','F','FS','PERM') or requested or festivo)));

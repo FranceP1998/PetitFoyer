@@ -5,6 +5,7 @@ import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
 import { generaPiano, calcolaStorico, DEFAULT_TEMPO } from './generatore.js';
+import { festivitaPredefinite } from './festivita.js';
 import { scadenzaRichieste, decisioneRichieste, giornoLibero, weekendPredefinito } from './richieste.js';
 
 const $ = (id) => document.getElementById(id);
@@ -129,7 +130,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v30`;
+  $('utente').textContent = `${stato.utente.name} · v31`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -570,8 +571,8 @@ $('gn-avvia').onclick = async () => {
   const modo = genModo();
   const { year: y, month: m } = { year: stato.y, month: stato.m };
   const { righe: delMese, bloccato } = await ambitoGenerazione(y, m);
-  const daCancellare = delMese.filter((s) => s.date > `${y}-${pad(m)}-01` && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested).length;
-  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}${bloccato ? '' : ' e nel 1° giorno del mese dopo'}. Ferie, permessi, richieste accettate e malattie restano, e restano anche i turni del 1° giorno, già stabiliti dal mese prima. Continuare?`)) return;
+  const daCancellare = delMese.filter((s) => s.date > `${y}-${pad(m)}-01` && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !s.festivo).length;
+  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}${bloccato ? '' : ' e nel 1° giorno del mese dopo'}. Ferie, permessi, richieste accettate, festività assegnate e malattie restano, e restano anche i turni del 1° giorno, già stabiliti dal mese prima. Continuare?`)) return;
   genVista('calcolo');
   $('gn-tempo').textContent = '0%';
   try {
@@ -626,10 +627,82 @@ $('btn-pulisci').onclick = async () => {
   const y = stato.y, m = stato.m;
   const { righe: delMese } = await ambitoGenerazione(y, m);
   const malati = new Set(delMese.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
-  const n = delMese.filter((s) => s.date > `${y}-${pad(m)}-01` && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !malati.has(`${s.staff_id}|${s.date}`)).length;
+  const n = delMese.filter((s) => s.date > `${y}-${pad(m)}-01` && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !s.festivo && !malati.has(`${s.staff_id}|${s.date}`)).length;
   if (!n) { alert('Non c\'è niente da cancellare: in questo mese ci sono solo caselle protette.'); return; }
-  if (!confirm(`Cancello ${n} turni e riposi di ${nomeMese(m).toLowerCase()} ${y} (compreso il 1° giorno del mese dopo, se non è pubblicato)?\n\nRestano i turni del 1° giorno del mese (già stabiliti dal mese prima), ferie, permessi, riposi richiesti, richieste accettate, malattie, 10-18, coperture e collettivi.`)) return;
+  if (!confirm(`Cancello ${n} turni e riposi di ${nomeMese(m).toLowerCase()} ${y} (compreso il 1° giorno del mese dopo, se non è pubblicato)?\n\nRestano i turni del 1° giorno del mese (già stabiliti dal mese prima), le festività assegnate, ferie, permessi, riposi richiesti, richieste accettate, malattie, 10-18, coperture e collettivi.`)) return;
   try { await stato.be.scriviPiano(y, m, [], true); await carica(); } catch (e) { alert(messaggio(e)); }
+};
+
+// ------------------------------------------------------------ festività (coordinatrice)
+const feStato = { y: 0, dati: { giorni: [], turni: [] } };
+const GIORNI_SETT = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+const feErrore = (t) => { $('fe-err').textContent = t; $('fe-err').hidden = !t; };
+async function feCarica() {
+  feStato.dati = await stato.be.elencaFestivita(feStato.y);
+  feDisegna();
+}
+function feDisegna() {
+  const ops = stato.dati.staff.filter((p) => p.role === 'operator' && p.active !== false).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  $('fe-anno').textContent = feStato.y;
+  const mancano = festivitaPredefinite(feStato.y).filter((f) => !feStato.dati.giorni.some((g) => g.date === f.date));
+  $('fe-predef').textContent = `Aggiungi le festività predefinite del ${feStato.y}`;
+  $('fe-predef').hidden = !mancano.length;
+  const chi = (data, k) => feStato.dati.turni.find((t) => t.date === data && t.kind === k)?.staff_id ?? '';
+  const sel = (data, k) => `<select data-d="${data}" data-k="${k}" aria-label="${k === 'M' ? 'Mattina' : k === 'P' ? 'Pomeriggio' : 'Notte'} del ${data.slice(8, 10)}/${data.slice(5, 7)}"><option value="">—</option>${ops.map((p) => `<option value="${p.id}"${String(chi(data, k)) === String(p.id) ? ' selected' : ''}>${p.name}</option>`).join('')}</select>`;
+  let h = '<div class="fe-riga fe-intest"><span>Festività</span><span>Mattina</span><span>Pomeriggio</span><span>Notte</span><span></span></div>';
+  for (const g of feStato.dati.giorni) {
+    const gs = GIORNI_SETT[new Date(`${g.date}T12:00:00Z`).getUTCDay()];
+    h += `<div class="fe-riga"><div class="fe-nome"><b>${g.date.slice(8, 10)}/${g.date.slice(5, 7)}</b> ${esc(g.label)}<small>${gs}</small></div>${sel(g.date, 'M')}${sel(g.date, 'P')}${sel(g.date, 'N')}<button type="button" class="link" data-togli="${g.date}">Togli</button></div>`;
+  }
+  if (!feStato.dati.giorni.length) h += '<p class="muted">Nessuna festività per quest\'anno. Aggiungi quelle predefinite o inserisci una data.</p>';
+  $('fe-lista').innerHTML = h;
+  // quante festività ha avuto ognuno quest'anno, per tenerle bilanciate
+  const conti = ops.map((p) => {
+    const t = feStato.dati.turni.filter((x) => x.staff_id === p.id);
+    return `${p.name} ${new Set(t.map((x) => x.date)).size}${t.some((x) => x.kind === 'N') ? ` (${t.filter((x) => x.kind === 'N').length} not.)` : ''}`;
+  });
+  $('fe-conti').textContent = feStato.dati.turni.length ? `Festività assegnate nel ${feStato.y}: ${conti.join(' · ')}` : '';
+}
+$('btn-festivita').onclick = async () => {
+  feStato.y = stato.y; feErrore('');
+  $('fe-data').value = '';
+  $('dlg-festivita').showModal();
+  try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
+};
+$('fe-prev').onclick = async () => { feStato.y--; feErrore(''); try { await feCarica(); } catch (e) { feErrore(messaggio(e)); } };
+$('fe-next').onclick = async () => { feStato.y++; feErrore(''); try { await feCarica(); } catch (e) { feErrore(messaggio(e)); } };
+$('fe-chiudi').onclick = () => $('dlg-festivita').close();
+$('dlg-festivita').addEventListener('close', () => { carica(); });
+$('fe-lista').addEventListener('change', async (ev) => {
+  const s = ev.target.closest('select[data-d]'); if (!s) return;
+  const data = s.dataset.d, scelte = {};
+  for (const k of ['M', 'P', 'N']) { const v = $('fe-lista').querySelector(`select[data-d="${data}"][data-k="${k}"]`).value; if (v) scelte[k] = +v; }
+  feErrore('');
+  try { await stato.be.impostaFestivita(data, null, scelte); } catch (e) { feErrore(messaggio(e)); }
+  try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
+});
+$('fe-lista').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button[data-togli]'); if (!b) return;
+  const data = b.dataset.togli;
+  if (!confirm(`Tolgo la festività del ${data.slice(8, 10)}/${data.slice(5, 7)}? I turni già assegnati restano nel foglio come turni normali e il generatore potrà cambiarli.`)) return;
+  feErrore('');
+  try { await stato.be.togliFestivita(data); } catch (e) { feErrore(messaggio(e)); }
+  try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
+});
+$('fe-aggiungi').onclick = async () => {
+  const data = $('fe-data').value;
+  if (!data) return feErrore('Scegli la data.');
+  if (data.slice(0, 4) !== String(feStato.y)) { feStato.y = +data.slice(0, 4); }
+  feErrore('');
+  try { await stato.be.impostaFestivita(data, $('fe-nome').value.trim() || 'Festività', {}); $('fe-data').value = ''; $('fe-nome').value = ''; } catch (e) { feErrore(messaggio(e)); }
+  try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
+};
+$('fe-predef').onclick = async () => {
+  feErrore('');
+  try {
+    for (const f of festivitaPredefinite(feStato.y)) if (!feStato.dati.giorni.some((g) => g.date === f.date)) await stato.be.impostaFestivita(f.date, f.label, {});
+  } catch (e) { feErrore(messaggio(e)); }
+  try { await feCarica(); } catch (e) { feErrore(messaggio(e)); }
 };
 
 // ------------------------------------------------------------ le ferie della coordinatrice
