@@ -129,7 +129,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v25`;
+  $('utente').textContent = `${stato.utente.name} · v26`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -565,18 +565,16 @@ $('gn-avvia').onclick = async () => {
   const daCancellare = delMese.filter((s) => ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested).length;
   if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}. Ferie, permessi, richieste accettate e malattie restano. Continuare?`)) return;
   genVista('calcolo');
-  const t0 = Date.now();
-  $('gn-tempo').textContent = '';
-  genTimer = setInterval(() => { $('gn-tempo').textContent = `(${Math.round((Date.now() - t0) / 1000)} s)`; }, 1000);
+  $('gn-tempo').textContent = '0%';
   try {
     const sto = calcolaStorico(await stato.be.storicoPiano(y, m), y, m);
     const dati = { year: y, month: m, staff: stato.dati.staff, shifts: delMese, prima: sto.prima, storico: sto.storico, weekendPrima: sto.weekendPrima, modalita: modo };
-    genPiano = await generaPiano(dati, { tempo: DEFAULT_TEMPO, risolvi: window.__risolviTest });
+    genPiano = await generaPiano(dati, { tempo: DEFAULT_TEMPO, risolvi: window.__risolviTest, progresso: (f) => { $('gn-tempo').textContent = `${Math.min(99, Math.round(f * 100))}%`; } });
     genPiano.modo = modo;
     genMostra();
   } catch (e) {
     genPiano = null; genVista('scelta'); genErrore(messaggio(e));
-  } finally { clearInterval(genTimer); }
+  }
 };
 function genMostra() {
   const r = genPiano.riepilogo;

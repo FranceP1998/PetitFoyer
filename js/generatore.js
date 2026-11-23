@@ -28,7 +28,7 @@ export const COSTI = {
 
 const TURNI = ['M', 'P', 'N'];
 const ASSENZE = ['F', 'FS', 'PERM', 'RR', 'RB', 'MU'];      // giorni in cui non si lavora
-export const DEFAULT_TEMPO = 60;                            // secondi concessi al solver
+export const DEFAULT_TEMPO = 30;                            // secondi concessi alla ricerca
 
 const iso = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 const giorniNelMese = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
@@ -236,6 +236,7 @@ export function costruisciModello(dati) {
   // --- weekend (solo i weekend interi dentro il mese)
   const weekend = [];
   for (let d = 1; d < D; d++) if (dow(dataDi(d)) === 6) weekend.push([d, d + 1]);
+  const memoriaOp = {}, bersagli = {}, bersaglioTotale = {};
   const mediaPrima = (() => {
     const v = flessibili.map((p) => (dati.weekendPrima || {})[p.id]).filter((x) => x !== undefined);
     return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
@@ -244,6 +245,7 @@ export function costruisciModello(dati) {
     for (const p of flessibili) {
       const o = p.id;
       const memoria = mediaPrima === null || (dati.weekendPrima || {})[o] === undefined ? 0 : clip(mediaPrima - dati.weekendPrima[o], -1, 1);
+      memoriaOp[o] = memoria;
       const fw = weekend.map(([sa, su], w) => {
         const f = nuova(`fw_${o}_${w}`, 'bin', 0, 1, -2 * (1 + 0.5 * memoria));
         con([[occTot(o, sa), 1], [V(f), 1]], null, 1, 'wk');
@@ -279,6 +281,7 @@ export function costruisciModello(dati) {
           target = clip(base + 0.5 * (serve - base), base - 2, base + 2);
         }
         target = Math.max(0, target);
+        (bersagli[p.id] ||= {})[s] = target;
         const conta = []; for (let d = 1; d <= D; d++) conta.push([X(p.id, s, d), 1]);
         const dv = nuova(`dv_${s}_${p.id}`, 'cont', 0, 60, COSTI.scostTipo);
         con([...conta, [V(dv), -1]], null, target, 'scT');
@@ -290,13 +293,14 @@ export function costruisciModello(dati) {
       const conta = []; for (let d = 1; d <= D; d++) for (const s of TURNI) conta.push([X(p.id, s, d), 1]);
       const dv = nuova(`dt_${p.id}`, 'cont', 0, 80, COSTI.scostTotale);
       const t = bersaglioTot.get(p.id);
+      bersaglioTotale[p.id] = t;
       con([...conta, [V(dv), -1]], null, t, 'scTot');
       con([...conta, [V(dv), 1]], t, null, 'scTot');
     }
   }
 
   const modello = { vars, cons, info, meta: { Y, Mo, D, operatori: operatori.map(id), flessibili: flessibili.map(id), fissi: fissi.map(id), weekend } };
-  modello._interni = { fisso, stato, dataDi, passato, operatori };
+  modello._interni = { fisso, stato, dataDi, passato, operatori, memoriaOp, bersagli, bersaglioTotale };
   return modello;
 }
 
@@ -354,8 +358,11 @@ export function leggiSoluzione(m, valori, dati) {
     if (chi.length !== 1) scoperti.push({ date: dataDi(d), kind: s, persone: chi.length });
   }
   // righe da scrivere: turni M/P/N e riposi obbligati, solo dove la casella era libera
-  const esistenti = new Set((dati.shifts || []).map((s) => `${s.staff_id}|${s.date}|${s.kind}`));
-  const haRiga = new Set((dati.shifts || []).map((s) => `${s.staff_id}|${s.date}`));
+  // nella modalità "rifà tutto" le righe non richieste (e senza malattia) vengono cancellate prima di scrivere: non contano come già presenti
+  const malati = new Set((dati.shifts || []).filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
+  const resta = (dati.shifts || []).filter((s) => modalita === 'vuoti' || s.requested || malati.has(`${s.staff_id}|${s.date}`) || !['M', 'P', 'N', 'R'].includes(s.kind));
+  const esistenti = new Set(resta.map((s) => `${s.staff_id}|${s.date}|${s.kind}`));
+  const haRiga = new Set(resta.map((s) => `${s.staff_id}|${s.date}`));
   const righe = [];
   const protette = (o, d) => stato[o][d] && (stato[o][d].assente || stato[o][d].occupato);
   for (const p of operatori) {
@@ -420,49 +427,173 @@ export function riepilogo(m, sol) {
   return { persone, scoperti: sol.scoperti, problemi: [...new Set(problemi)] };
 }
 
-// --------------------------------------------------------------------------- risoluzione con HiGHS (nel browser)
-// HiGHS compilato in WebAssembly (pacchetto "highs"), caricato da una rete di distribuzione al primo uso e
-// fatto girare in un Web Worker, così la pagina resta fluida durante il calcolo.
-const HIGHS_BASE = 'https://cdn.jsdelivr.net/npm/highs@1.8.0/build/';
+// --------------------------------------------------------------------------- ricerca locale (la soluzione usata dall'app)
+// Parte da un piano costruito turno per turno e lo migliora per tentativi (ricottura simulata): sposta un turno da un
+// operatore a un altro o scambia due turni, tenendo ogni volta solo i cambi che abbassano il costo (o, all'inizio, quasi).
+// Il costo è lo stesso del modello esatto: stesse regole, stessi pesi. Funziona dentro il browser, senza librerie esterne.
+const BIT = { M: 1, P: 2, N: 4 };
+const OFF = 4;
+const pop = (x) => (x & 1) + ((x >> 1) & 1) + ((x >> 2) & 1);
+function generatoreCasuale(seme) {
+  let a = seme >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
 
-export function risolviNelBrowser(lp, { tempo = DEFAULT_TEMPO } = {}) {
-  // Il solver in WebAssembly può cadere con certe opzioni: si prova una serie di impostazioni, dalla più completa alla più
-  // semplice, ognuna con un solver nuovo (dopo un errore quello vecchio non è più affidabile). Si usa la prima che funziona.
-  const sorgente = `
-    self.onmessage = async (ev) => {
-      const errori = [];
-      try { importScripts('${HIGHS_BASE}highs.js'); } catch (e) { self.postMessage({ ok: false, errore: 'Caricamento del solver non riuscito: ' + (e && e.message || e) }); return; }
-      const fabbrica = (typeof Module === 'function' ? Module : (typeof Highs === 'function' ? Highs : (typeof highs === 'function' ? highs : null)));
-      if (!fabbrica) { self.postMessage({ ok: false, errore: 'Caricamento del solver non riuscito.' }); return; }
-      const t = ev.data.tempo;
-      const tentativi = [
-        { nome: 'standard', opz: { time_limit: t, mip_rel_gap: 0.01 } },
-        { nome: 'senza presolve', opz: { time_limit: t, mip_rel_gap: 0.01, presolve: 'off' } },
-        { nome: 'minimo', opz: { time_limit: t } },
-        { nome: 'minimo senza presolve', opz: { time_limit: t, presolve: 'off' } },
-      ];
-      for (const tent of tentativi) {
-        try {
-          const highs = await fabbrica({ locateFile: (f) => '${HIGHS_BASE}' + f });
-          const sol = highs.solve(ev.data.lp, tent.opz);
-          const valori = {};
-          for (const [nome, c] of Object.entries(sol.Columns || {})) valori[nome] = c.Primal;
-          if (!Object.keys(valori).length) { errori.push(tent.nome + ': nessun piano (' + sol.Status + ')'); continue; }
-          self.postMessage({ ok: true, stato: sol.Status, valori, tentativo: tent.nome, errori });
-          return;
-        } catch (e) { errori.push(tent.nome + ': ' + String(e && e.message || e)); }
+async function unaRicerca(m, { tempo, seme, progresso, T0 = 120, T1 = 0.4 }) {
+  const { D, flessibili, weekend } = m.meta;
+  const { fisso, stato, memoriaOp, bersagli, bersaglioTotale, operatori } = m._interni;
+  const rnd = generatoreCasuale(seme);
+  const ops = flessibili; const nOp = ops.length;
+  const tutti = operatori.map((p) => p.id);
+  const len = D + 1 + OFF;
+  const riga = ops.map(() => new Int8Array(len));
+  const lib = (i, d, s) => fisso[ops[i]][d]?.[s] === undefined;           // la casella è una scelta del programma?
+
+  // turni già fissi (passato, richieste, malattia, schema di Andrea…)
+  ops.forEach((o, i) => { for (let d = -OFF; d <= D; d++) for (const s of TURNI) if (fisso[o][d]?.[s] === 1) riga[i][d + OFF] |= BIT[s]; });
+  const occup = ops.map((o) => { const a = new Uint8Array(len); for (let d = 1; d <= D; d++) a[d + OFF] = stato[o][d].occupato ? 1 : 0; return a; });
+
+  // caselle (giorno, turno) da assegnare: quelle che nessuno ha già fissato
+  const slot = [];
+  for (let d = 1; d <= D; d++) for (const s of TURNI) {
+    const gia = tutti.filter((o) => fisso[o][d]?.[s] === 1).length;
+    if (gia === 0) {
+      const cand = []; for (let i = 0; i < nOp; i++) if (lib(i, d, s)) cand.push(i);
+      slot.push({ d, s, cand, owner: -1 });
+    }
+  }
+
+  const idx = {}; slot.forEach((sl, k) => { idx[sl.d * 4 + TURNI.indexOf(sl.s)] = k; });
+  const occ = new Uint8Array(len);
+  function costo(i) {
+    const o = ops[i], r = riga[i];
+    for (let d = -3; d <= D; d++) occ[d + OFF] = (d >= 1 && occup[i][d + OFF]) || r[d + OFF] !== 0 || (r[d - 1 + OFF] & 4) ? 1 : 0;
+    let c = 0;
+    let nM = 0, nP = 0, nN = 0;
+    for (let d = 1; d <= D; d++) {
+      const b = r[d + OFF], pr = r[d - 1 + OFF], pr2 = r[d - 2 + OFF];
+      const cnt = pop(b), nPrev = (pr & 4) ? 1 : 0, nPrev2 = (pr2 & 4) ? 1 : 0;
+      if (b & 1) nM++; if (b & 2) nP++; if (b & 4) nN++;
+      if (cnt > 1) c += COSTI.riposoDopoNotte * (cnt - 1);
+      const mp = (b & 1 ? 1 : 0) + (b & 2 ? 1 : 0);
+      if (mp + nPrev > 1) c += COSTI.riposoDopoNotte * (mp + nPrev - 1);
+      if (nPrev2 + cnt > 1) c += COSTI.riposoDopoNotte * (nPrev2 + cnt - 1);
+      if ((pr & 2) && (b & 1)) c += COSTI.undiciOre;
+      if ((b & 4) && nPrev) c += COSTI.doppiaNotte;
+      if (d + 2 <= D && (b & 4) && (r[d + 1 + OFF] & 4) && (r[d + 2 + OFF] & 4)) c += COSTI.tripleNotte;
+    }
+    for (let d = -3; d <= D - 4; d++) { const t = occ[d + OFF] + occ[d + 1 + OFF] + occ[d + 2 + OFF] + occ[d + 3 + OFF] + occ[d + 4 + OFF]; if (t > 4) c += COSTI.oltre4 * (t - 4); }
+    for (let d = -2; d <= D - 3; d++) { const t = occ[d + OFF] + occ[d + 1 + OFF] + occ[d + 2 + OFF] + occ[d + 3 + OFF]; if (t > 3) c += COSTI.quattroDiFila * (t - 3); }
+    if (weekend.length) {
+      let liberi = 0; const memo = memoriaOp[o] || 0;
+      for (const [sa, su] of weekend) {
+        const a = occ[sa + OFF], b = occ[su + OFF];
+        if (!a && !b) { liberi++; c -= 2 * (1 + 0.5 * memo); }
+        if (a && b) c += COSTI.sabatoEDomenica;
       }
-      self.postMessage({ ok: false, errore: errori.join(' | ') });
-    };`;
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([sorgente], { type: 'application/javascript' }));
-    const w = new Worker(url);
-    const chiudi = () => { w.terminate(); URL.revokeObjectURL(url); };
-    const guardia = setTimeout(() => { chiudi(); reject(new Error('Il calcolo ha impiegato troppo tempo.')); }, (tempo * 4 + 60) * 1000);
-    w.onmessage = (ev) => { clearTimeout(guardia); chiudi(); ev.data.ok ? resolve(ev.data) : reject(new Error(ev.data.errore)); };
-    w.onerror = (ev) => { clearTimeout(guardia); chiudi(); reject(new Error('Impossibile avviare il solver (rete assente?): ' + (ev.message || ''))); };
-    w.postMessage({ lp, tempo });
-  });
+      if (liberi < 1) c += COSTI.nessunWeekend;
+      c += COSTI.secondoWeekend * Math.max(0, Math.min(2, weekend.length) - liberi);
+    }
+    const bt = bersagli[o];
+    if (bt) {
+      c += COSTI.scostTipo * (Math.abs(nM - bt.M) + Math.abs(nP - bt.P) + Math.abs(nN - bt.N));
+      c += COSTI.scostTotale * Math.abs(nM + nP + nN - bersaglioTotale[o]);
+    }
+    return c;
+  }
+  const costoOp = new Float64Array(nOp);
+  const metti = (i, d, s) => { riga[i][d + OFF] |= BIT[s]; };
+  const togli = (i, d, s) => { riga[i][d + OFF] &= ~BIT[s]; };
+
+  // piano di partenza: ogni turno al candidato che costa meno in quel momento
+  for (let i = 0; i < nOp; i++) costoOp[i] = costo(i);
+  const ordine = slot.map((_, k) => k).sort((a, b) => slot[a].cand.length - slot[b].cand.length || slot[a].d - slot[b].d);
+  for (const k of ordine) {
+    const sl = slot[k]; let best = -1, bd = Infinity;
+    for (const i of sl.cand) {
+      metti(i, sl.d, sl.s); const c = costo(i) - costoOp[i]; togli(i, sl.d, sl.s);
+      const x = c + rnd() * 0.5;
+      if (x < bd) { bd = x; best = i; }
+    }
+    if (best >= 0) { sl.owner = best; metti(best, sl.d, sl.s); costoOp[best] = costo(best); }
+  }
+  let totale = 0; for (let i = 0; i < nOp; i++) totale += costoOp[i];
+  const scop = () => slot.reduce((a, sl) => a + (sl.owner < 0 ? 1 : 0), 0);
+  let costoTot = totale + COSTI.scoperto * scop();
+  let migliore = costoTot, copia = slot.map((sl) => sl.owner);
+
+  // ricottura
+  const mobili = slot.map((_, k) => k).filter((k) => slot[k].cand.length > 1);
+  const inizio = Date.now(), durata = tempo * 1000;
+  let it = 0, ultimoProg = 0, T = T0;
+  while (mobili.length) {
+    if ((it & 255) === 0) {
+      const t = Date.now() - inizio;
+      if (t >= durata) break;
+      if (progresso && Date.now() - ultimoProg > 500) { ultimoProg = Date.now(); progresso(t / durata, migliore); await new Promise((r) => setTimeout(r, 0)); }
+    }
+    if ((it & 255) === 0) T = T0 * Math.pow(T1 / T0, Math.min(1, (Date.now() - inizio) / durata));
+    it++;
+    const k1 = mobili[(rnd() * mobili.length) | 0], s1 = slot[k1];
+    if (rnd() < 0.5) {
+      // sposta il turno a un altro operatore
+      const nuovo = s1.cand[(rnd() * s1.cand.length) | 0], vecchio = s1.owner;
+      if (nuovo === vecchio) continue;
+      if (vecchio >= 0) togli(vecchio, s1.d, s1.s);
+      metti(nuovo, s1.d, s1.s);
+      const cV = vecchio >= 0 ? costo(vecchio) : 0, cN = costo(nuovo);
+      const delta = (cN - costoOp[nuovo]) + (vecchio >= 0 ? cV - costoOp[vecchio] : COSTI.scoperto * -1);
+      if (delta <= 0 || rnd() < Math.exp(-delta / Math.max(T, 1e-6))) {
+        s1.owner = nuovo; costoOp[nuovo] = cN; if (vecchio >= 0) costoOp[vecchio] = cV; costoTot += delta;
+      } else { togli(nuovo, s1.d, s1.s); if (vecchio >= 0) metti(vecchio, s1.d, s1.s); }
+    } else {
+      // scambia i turni di due operatori, per un solo turno o per un blocco di giorni consecutivi
+      const k2 = mobili[(rnd() * mobili.length) | 0], s2 = slot[k2];
+      const a = s1.owner, b = s2.owner;
+      if (a < 0 || b < 0 || a === b) continue;
+      const blocco = rnd() < 0.5 ? 1 + ((rnd() * 7) | 0) : 0;
+      let cambi;                                                        // [slot, da, a]
+      if (blocco) {
+        cambi = [];
+        const d0 = Math.max(1, s1.d - ((rnd() * blocco) | 0));
+        for (let d = d0; d < d0 + blocco && d <= D; d++) for (let t = 0; t < 3; t++) {
+          const k = idx[d * 4 + t]; if (k === undefined) continue;
+          const o = slot[k].owner;
+          if (o === a) cambi.push([k, a, b]); else if (o === b) cambi.push([k, b, a]);
+        }
+        if (!cambi.length || cambi.some(([k, , n]) => !lib(n, slot[k].d, slot[k].s))) continue;
+      } else {
+        if (k1 === k2 || !lib(a, s2.d, s2.s) || !lib(b, s1.d, s1.s)) continue;
+        cambi = [[k1, a, b], [k2, b, a]];
+      }
+      for (const [k, da, aa] of cambi) { togli(da, slot[k].d, slot[k].s); }
+      for (const [k, , aa] of cambi) { metti(aa, slot[k].d, slot[k].s); }
+      const cA = costo(a), cB = costo(b);
+      const delta = (cA - costoOp[a]) + (cB - costoOp[b]);
+      if (delta <= 0 || rnd() < Math.exp(-delta / Math.max(T, 1e-6))) {
+        for (const [k, , aa] of cambi) slot[k].owner = aa;
+        costoOp[a] = cA; costoOp[b] = cB; costoTot += delta;
+      } else {
+        for (const [k, , aa] of cambi) togli(aa, slot[k].d, slot[k].s);
+        for (const [k, da] of cambi) metti(da, slot[k].d, slot[k].s);
+      }
+    }
+    if (costoTot < migliore - 1e-9) { migliore = costoTot; copia = slot.map((sl) => sl.owner); }
+  }
+  const valori = {};
+  slot.forEach((sl, k) => { const i = copia[k]; if (i >= 0) valori[`x_${sl.s}_${ops[i]}_${sl.d}`] = 1; });
+  return { stato: 'Ricerca locale', valori, costo: migliore, passi: it };
+}
+
+// Tre ricerche indipendenti, una dopo l'altra, e si tiene la migliore (partendo da punti diversi il risultato cambia un po').
+export async function risolviLocale(m, { tempo = DEFAULT_TEMPO, seme = Math.floor(Math.random() * 1e9), progresso = null, T0, T1 } = {}) {
+  const giri = 3; let migliore = null, passi = 0;
+  for (let g = 0; g < giri; g++) {
+    const r = await unaRicerca(m, { tempo: tempo / giri, seme: seme + g * 7919, T0, T1, progresso: progresso ? (f, c) => progresso((g + f) / giri, Math.min(c, migliore ? migliore.costo : c)) : null });
+    passi += r.passi;
+    if (!migliore || r.costo < migliore.costo) migliore = r;
+  }
+  return { ...migliore, passi };
 }
 
 // --------------------------------------------------------------------------- storico (mese precedente e anno in corso)
@@ -500,9 +631,9 @@ export function calcolaStorico(righe, y, m, nomiOperatori = null) {
 // --------------------------------------------------------------------------- tutto insieme
 export async function generaPiano(dati, opzioni = {}) {
   const m = costruisciModello(dati);
-  const lp = scriviLP(m);
-  const risposta = await (opzioni.risolvi || risolviNelBrowser)(lp, opzioni);
-  if (!risposta.valori || !Object.keys(risposta.valori).length) throw new Error('Il solver non ha trovato nessun piano (' + (risposta.stato || 'sconosciuto') + ').');
+  let risposta;
+  if (opzioni.risolvi) risposta = await opzioni.risolvi(scriviLP(m), opzioni);        // solo per le prove: solver esterno
+  else risposta = await risolviLocale(m, opzioni);
   const sol = leggiSoluzione(m, risposta.valori, dati);
-  return { ...sol, riepilogo: riepilogo(m, sol), stato: risposta.stato, modello: m };
+  return { ...sol, riepilogo: riepilogo(m, sol), stato: risposta.stato, costo: risposta.costo, modello: m };
 }
