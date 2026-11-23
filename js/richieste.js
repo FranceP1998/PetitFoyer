@@ -41,7 +41,7 @@ export function controllaRegole(db, staffId, date, kind, escludi = null) {
   return avvisi;
 }
 
-// Ferie e permessi: blocca giorno occupato, domenica a inizio/fine, periodi troppo lunghi; avvisa se sono già assenti almeno 2 colleghi
+// Ferie e permessi: blocca giorno occupato e periodi troppo lunghi (sabati e domeniche, anche a inizio e fine, diventano il trattino); avvisa se sono già assenti almeno 2 colleghi
 export function controllaFerie(db, staffId, da, a, escludi = null) {
   const tipo = (d) => db.shifts.find((s) => s.staff_id === staffId && s.date === d && PRINCIPALI.includes(s.kind))?.kind
     || (db.richieste || []).find((r) => r.staff_id === staffId && r.status === 'pending' && r.id !== escludi && d >= r.date && d <= (r.last_date || r.date))?.kind || null;
@@ -49,9 +49,6 @@ export function controllaFerie(db, staffId, da, a, escludi = null) {
   if ((Date.parse(a) - Date.parse(da)) / 864e5 > 44) err('Al massimo 45 giorni per volta.');
   const persona = (db.staff || []).find((p) => p.id === staffId);
   const dom = (d) => giornoLibero(persona, d);
-  if (dom(da) || dom(a)) err(persona?.senza_weekend
-    ? 'Il sabato e la domenica non si chiedono: non contano come giorni di ferie o permesso. Scegli un giorno da lunedì a venerdì (i weekend in mezzo diventano da soli il trattino).'
-    : 'La domenica non si chiede: non conta come giorno di ferie o permesso. Scegli da lunedì a sabato (le domeniche in mezzo diventano da sole il trattino).');
   const operatori = new Set((db.staff || []).filter((p) => p.role === 'operator').map((p) => p.id));
   const giorni = [];
   for (let d = da; d <= a; d = giorno(d, 1)) {

@@ -128,7 +128,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v22`;
+  $('utente').textContent = `${stato.utente.name} · v23`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -164,7 +164,7 @@ function richiestePerFoglio() {
   for (const r of stato.richieste.filter((x) => x.status === 'pending')) {
     const critica = (r.avvisi || []).length > 0;
     if (r.kind === 'F' || r.kind === 'PERM') {
-      // ferie e permessi: una casella per giorno, le domeniche in mezzo sono il trattino
+      // ferie e permessi: una casella per giorno, le domeniche sono il trattino
       for (let d = new Date(`${r.date}T00:00:00Z`), fine = new Date(`${r.last_date || r.date}T00:00:00Z`); d <= fine; d.setUTCDate(d.getUTCDate() + 1)) {
         const giorno = d.toISOString().slice(0, 10);
         out.push({ staff_id: r.staff_id, date: giorno, kind: giornoLibero(stato.dati?.staff?.find((p) => p.id === r.staff_id), giorno) ? 'FS' : r.kind, requested: false, pending: true, critica });
@@ -405,7 +405,7 @@ async function apriRichieste(dataScelta = null) {
     if (dataScelta && ricMeseOp && ricMeseOp.year === +dataScelta.slice(0, 4) && ricMeseOp.month === +dataScelta.slice(5, 7)) $('ric-data').value = dataScelta;
     $('ric-op').hidden = !mesi.length;
     $('ric-testo').textContent = mesi.length
-      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese; ferie e permessi sono a parte, si chiedono da un giorno a un altro (le domeniche in mezzo diventano da sole il trattino). Le richieste di un mese si aprono il 1 ottobre dell'anno prima e vanno inviate entro mezzanotte del 20 del mese prima; poi Marie ha tempo fino a mezzanotte del 21 per rispondere. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Se Marie non risponde entro la mezzanotte del 21 la richiesta vale come accettata. Qui vedi anche quelle dei colleghi.`
+      ? `Puoi chiedere al massimo ${MAX_RICHIESTE} tra riposi e turni al mese; ferie e permessi sono a parte, si chiedono da un giorno a un altro (le domeniche, anche se sono il primo o l'ultimo giorno, diventano da sole il trattino). Le richieste di un mese si aprono il 1 ottobre dell'anno prima e vanno inviate entro mezzanotte del 20 del mese prima; poi Marie ha tempo fino a mezzanotte del 21 per rispondere. Se più persone chiedono lo stesso turno vale chi lo chiede per primo. Se una regola non è rispettata (per esempio una mattina dopo un pomeriggio) puoi comunque chiedere: Marie la vedrà in giallo e deciderà. Se Marie non risponde entro la mezzanotte del 21 la richiesta vale come accettata. Qui vedi anche quelle dei colleghi.`
       : 'Per questo mese le richieste sono chiuse: si possono fare dal 1 ottobre dell\'anno prima fino a mezzanotte del 20 del mese prima.';
   }
   await disegnaRichieste();

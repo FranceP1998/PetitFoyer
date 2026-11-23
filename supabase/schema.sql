@@ -895,7 +895,7 @@ language sql immutable as $$
                  else ' del ' || to_char(p_date, 'DD/MM') end;
 $$;
 
--- Ferie e permessi: BLOCCANO il giorno già occupato, la domenica a inizio o fine (per chi non fa il weekend anche il sabato)
+-- Ferie e permessi: BLOCCANO il giorno già occupato e i periodi oltre 45 giorni. Sabati e domeniche (al centro o ai margini) diventano il trattino
 -- e i periodi troppo lunghi; AVVISANO se in quei giorni sono già assenti almeno 2 colleghi.
 create or replace function public.controlla_ferie(p_staff bigint, p_da date, p_a date, p_escludi bigint default null)
 returns text[]
@@ -907,12 +907,6 @@ declare d date; n int; t text; a text[] := '{}'; giorni text := '';
 begin
   if p_a < p_da then raise exception 'L''ultimo giorno è prima del primo.' using errcode = '22023'; end if;
   if p_a - p_da > 44 then raise exception 'Al massimo 45 giorni per volta.' using errcode = '22023'; end if;
-  if public.giorno_libero(p_staff, p_da) or public.giorno_libero(p_staff, p_a) then
-    raise exception '%', case when coalesce((select senza_weekend from public.staff where id = p_staff), false)
-      then 'Il sabato e la domenica non si chiedono: non contano come giorni di ferie o permesso. Scegli un giorno da lunedì a venerdì (i weekend in mezzo diventano da soli il trattino).'
-      else 'La domenica non si chiede: non conta come giorno di ferie o permesso. Scegli da lunedì a sabato (le domeniche in mezzo diventano da sole il trattino).' end
-      using errcode = '22023';
-  end if;
   for d in select g::date from generate_series(p_da, p_a, interval '1 day') g loop
     t := public.tipo_giorno(p_staff, d, p_escludi);
     if t is not null and t <> 'R' then
@@ -1166,8 +1160,8 @@ end;
 $$;
 
 -- Le ferie (o i permessi) della coordinatrice: le segna lei stessa, senza richiesta né approvazione.
--- Valgono le stesse regole di blocco delle ferie degli operatori (giorno già occupato, periodo troppo lungo,
--- sabato o domenica a inizio e fine); sabati e domeniche in mezzo al periodo diventano il trattino.
+-- Valgono le stesse regole di blocco delle ferie degli operatori (giorno già occupato, periodo troppo lungo);
+-- sabati e domeniche, anche a inizio e fine del periodo, diventano il trattino.
 create or replace function public.mie_ferie(p_da date, p_a date, p_kind text default 'F')
 returns void
 language plpgsql
