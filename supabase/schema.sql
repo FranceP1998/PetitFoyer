@@ -1190,7 +1190,8 @@ end;
 $$;
 
 -- Scrive nel mese il piano proposto dal generatore (bozza). Tutto in una volta: o va tutto o non cambia niente.
--- p_sostituisci = true: prima toglie M, P, N e R non richiesti del mese (ferie, permessi, richieste accettate, malattie,
+-- Il periodo è il mese più il 1° del mese dopo (se quel mese non è pubblicato).
+-- p_sostituisci = true: prima toglie M, P, N e R non richiesti del periodo (ferie, permessi, richieste accettate, malattie,
 -- coperture e il resto restano); false: aggiunge soltanto, il generatore ha già lasciato fuori le caselle occupate.
 create or replace function public.scrivi_piano(p_year int, p_month int, p_righe jsonb, p_sostituisci boolean)
 returns int
@@ -1203,6 +1204,10 @@ begin
   if not public.is_coordinator() then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
   if exists (select 1 from public.months where year = p_year and month = p_month and status = 'published') then
     raise exception 'Il mese è già pubblicato: non si può generare di nuovo.' using errcode = '22023';
+  end if;
+  -- il foglio mostra anche il 1° del mese dopo: il generatore lo compila come anticipo, a meno che quel mese sia già pubblicato
+  if not exists (select 1 from public.months where year = extract(year from v_a + 1)::int and month = extract(month from v_a + 1)::int and status = 'published') then
+    v_a := v_a + 1;
   end if;
   if p_sostituisci then
     delete from public.shifts where date between v_da and v_a and kind in ('M','P','N','R') and not requested

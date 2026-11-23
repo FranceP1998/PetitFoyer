@@ -1,7 +1,8 @@
 import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, notteRichiestaDa, scostamento, inServizio } from './cella.js';
 
 // Disegna il foglio turni come tabella HTML (stesso schema del foglio cartaceo):
-// due righe per persona (M sopra, P sotto), giorni in orizzontale, ultima colonna = 1° del mese dopo.
+// due righe per persona (M sopra, P sotto), giorni in orizzontale; prima colonna = ultimo giorno del mese prima,
+// ultima colonna = 1° del mese dopo.
 
 const LETTERE = ['D', 'L', 'M', 'M', 'G', 'V', 'S'];          // getDay(): 0 = domenica
 const MESI = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
@@ -35,6 +36,7 @@ export function giorniDelMese(y, m) { return new Date(y, m, 0).getDate(); }
 
 // Giorno successivo all'ultimo del mese: { y, m, d:1 }
 export function meseDopo(y, m) { return m === 12 ? { y: y + 1, m: 1 } : { y, m: m + 1 }; }
+export function mesePrima(y, m) { return m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 }; }
 
 function indicizza(shifts) {
   const map = new Map();            // "staffId|data" -> [{kind, requested}]
@@ -89,25 +91,27 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
   const get = (sid, data) => idx.get(`${sid}|${data}`) || [];
   const ev = (data) => events.filter((e) => e.date === data);
 
-  // colonne: 1..nGiorni + colonna extra (1° del mese dopo)
+  // colonne: ultimo giorno del mese prima + 1..nGiorni + colonna extra (1° del mese dopo)
+  const prec = mesePrima(year, month);
   const cols = [];
-  for (let d = 1; d <= nGiorni + 1; d++) {
-    const extra = d === nGiorni + 1;
-    const yy = extra ? next.y : year, mm = extra ? next.m : month, dd = extra ? 1 : d;
+  for (let d = 0; d <= nGiorni + 1; d++) {
+    const prima = d === 0, extra = d === nGiorni + 1;
+    const yy = extra ? next.y : prima ? prec.y : year, mm = extra ? next.m : prima ? prec.m : month;
+    const dd = extra ? 1 : prima ? giorniDelMese(prec.y, prec.m) : d;
     const data = iso(yy, mm, dd);
     const dow = new Date(yy, mm - 1, dd).getDay();
     const eventi = ev(data);
     cols.push({
-      d, extra, data, dow, dd, mm, yy,
+      d, extra, prima, data, dow, dd, mm, yy,
       sun: dow === 0,
-      weekEnd: dow === 0 || extra,
+      weekEnd: dow === 0 || extra || prima,
       collettivo: eventi.some((e) => e.kind === 'collettivo'),
       spesa: eventi.some((e) => e.kind === 'spesa'),
       altro: eventi.some((e) => e.kind === 'altro'),
     });
   }
   const classiCol = (c) =>
-    [c.sun ? 'sun' : '', c.weekEnd ? 'wk' : '', c.extra ? 'extra' : '', c.collettivo ? 'ev-coll' : ''].filter(Boolean).join(' ');
+    [c.sun ? 'sun' : '', c.weekEnd ? 'wk' : '', c.extra ? 'extra' : '', c.prima ? 'prima' : '', c.collettivo ? 'ev-coll' : ''].filter(Boolean).join(' ');
 
   const ordinati = [...staff].filter((s) => inServizio(s, year, month)).sort((a, b) => a.sort_order - b.sort_order);
 
@@ -119,7 +123,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
   html += '</tr><tr class="h-numeri">';
   for (const c of cols) {
     const cls = [classiCol(c), c.spesa ? 'ev-spesa' : '', c.altro ? 'ev-altro' : ''].filter(Boolean).join(' ');
-    html += `<th class="${cls}">${c.extra ? `${pad(c.dd)}/${pad(c.mm)}` : c.d}</th>`;
+    html += `<th class="${cls}">${c.extra || c.prima ? `${pad(c.dd)}/${pad(c.mm)}` : c.d}</th>`;
   }
   html += '</tr></thead><tbody>';
 
@@ -132,7 +136,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
     for (const c of cols) {
       const k = classiCol(c);
       const cella = (riga, contenuto, extraCls = '', rowspan = 1) => {
-        const attrs = (p && editable ? ` data-staff="${p.id}" data-date="${c.data}"` : '') + (p ? ` data-p="${p.id}" data-d="${c.data}"` : '');
+        const attrs = (p && editable && !c.prima ? ` data-staff="${p.id}" data-date="${c.data}"` : '') + (p ? ` data-p="${p.id}" data-d="${c.data}"` : '');
         return `<td class="${k} ${extraCls}"${rowspan > 1 ? ' rowspan="2"' : ''}${attrs}>${contenuto}</td>`;
       };
       if (!p) { rM += cella('m', ''); rP += cella('p', ''); continue; }
@@ -173,7 +177,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
   // di fine settimana e di fine mese, come nel foglio cartaceo
   const separatore = () => {
     let r = '<tr class="sep" aria-hidden="true"><td class="sep-nome"></td>';
-    for (const c of cols) r += `<td class="${[c.weekEnd ? 'wk' : '', c.extra ? 'extra' : ''].filter(Boolean).join(' ')}"></td>`;
+    for (const c of cols) r += `<td class="${[c.weekEnd ? 'wk' : '', c.extra ? 'extra' : '', c.prima ? 'prima' : ''].filter(Boolean).join(' ')}"></td>`;
     return r + '</tr>';
   };
   const blocchi = [...ordinati, ...Array(righeVuote).fill(null)];

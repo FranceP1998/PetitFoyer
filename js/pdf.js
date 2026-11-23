@@ -3,7 +3,7 @@
 // Stesse regole grafiche del foglio a schermo (grid.js): due righe per operatore, caselle quadrate,
 // striscia bianca tra un operatore e l'altro, sbarra della notte, domeniche gialle, ecc.
 
-import { giorniDelMese, meseDopo, nomeMese, pad, iso, righeLegenda } from './grid.js';
+import { giorniDelMese, meseDopo, mesePrima, nomeMese, pad, iso, righeLegenda } from './grid.js';
 import { descriviCella, notteFinisceDa, muDaIeri, deltaFineNotte, notteRichiestaDa, inServizio } from './cella.js';
 import { LARGHEZZE } from './pdf-metrics.js';
 
@@ -122,7 +122,8 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   const next = meseDopo(year, month);
   const persone = [...staff].filter((p) => inServizio(p, year, month)).sort((a, b) => a.sort_order - b.sort_order);
   const n = persone.length;
-  const nCol = nGiorni + 1;                                    // giorni del mese + 1° del mese dopo
+  const prec = mesePrima(year, month);
+  const nCol = nGiorni + 2;                                    // ultimo giorno del mese prima + giorni del mese + 1° del mese dopo
 
   const idx = new Map();
   for (const s of shifts) {
@@ -133,13 +134,15 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   const get = (sid, data) => idx.get(`${sid}|${data}`) || [];
 
   const cols = [];
-  for (let d = 1; d <= nCol; d++) {
-    const extra = d === nCol;
-    const yy = extra ? next.y : year, mm = extra ? next.m : month, dd = extra ? 1 : d;
+  for (let j = 0; j < nCol; j++) {
+    const prima = j === 0, extra = j === nCol - 1;
+    const d = j;
+    const yy = extra ? next.y : prima ? prec.y : year, mm = extra ? next.m : prima ? prec.m : month;
+    const dd = extra ? 1 : prima ? giorniDelMese(prec.y, prec.m) : d;
     const data = iso(yy, mm, dd);
     const dow = new Date(yy, mm - 1, dd).getDay();
     const ev = events.filter((e) => e.date === data);
-    cols.push({ d, extra, data, dow, dd, mm, yy, sun: dow === 0, wk: dow === 0 || extra,
+    cols.push({ d, extra, prima, data, dow, dd, mm, yy, sun: dow === 0, wk: dow === 0 || extra || prima,
       coll: ev.some((e) => e.kind === 'collettivo'), spesa: ev.some((e) => e.kind === 'spesa') });
   }
 
@@ -240,7 +243,7 @@ export function creaPdf({ year, month, staff, shifts, events, servizio = '', not
   cols.forEach((c, j) => {
     const cx = xs(j) + s / 2;
     pg.testoCentro(LETTERE[c.dow], cx, yT0 + hh / 2, 'B', 0.40 * s * MM);
-    pg.testoCentro(c.extra ? `${pad(c.dd)}/${pad(c.mm)}` : String(c.d), cx, yT0 + hh * 1.5, 'B', (c.extra ? 0.30 : 0.40) * s * MM);
+    pg.testoCentro(c.extra || c.prima ? `${pad(c.dd)}/${pad(c.mm)}` : String(c.d), cx, yT0 + hh * 1.5, 'B', (c.extra || c.prima ? 0.30 : 0.40) * s * MM);
   });
 
   // 3. contenuto delle caselle

@@ -170,12 +170,16 @@ function backendDemo() {
     },
     // ferie e permessi della coordinatrice: le segna lei, senza approvazione
     async storicoPiano(y, m) {
-      const primo = iso(y, m, 1), gen = iso(y, 1, 1);
+      const primo = iso(y, m, 1), gen = giorniPrimaDi(iso(y, 1, 1), 7);   // a gennaio servono anche gli ultimi giorni di dicembre
       return db.shifts.filter((s) => s.date >= gen && s.date < primo && ['M', 'P', 'N'].includes(s.kind)).map((s) => ({ staff_id: s.staff_id, date: s.date, kind: s.kind }));
     },
     async scriviPiano(y, m, righe, sostituisci) {
       if ((db.monthsState?.[`${y}-${m}`] || { status: 'draft' }).status === 'published') throw new Error('Il mese è già pubblicato: non si può generare di nuovo.');
-      const da = iso(y, m, 1), a = iso(y, m, giorniDelMese(y, m));
+      const da = iso(y, m, 1);
+      const dopo = m === 12 ? { y: y + 1, m: 1 } : { y, m: m + 1 };
+      // il foglio mostra anche il 1° del mese dopo: lo si compila come anticipo, salvo che quel mese sia già pubblicato
+      const dopoPubblicato = (db.monthsState?.[`${dopo.y}-${dopo.m}`] || (dopo.y === DEMO.month.year && dopo.m === DEMO.month.month ? DEMO.month : { status: 'draft' })).status === 'published';
+      const a = dopoPubblicato ? iso(y, m, giorniDelMese(y, m)) : iso(dopo.y, dopo.m, 1);
       if (sostituisci) {
         const mu = new Set(db.shifts.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
         db.shifts = db.shifts.filter((s) => !(s.date >= da && s.date <= a && ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !mu.has(`${s.staff_id}|${s.date}`)));
@@ -432,7 +436,7 @@ async function backendSupabase() {
     async elaboraScadenze() { return errore(await sb.rpc('elabora_scadenze')); },
     async inviaRichiesta(date, kind, conferma = false, fine = null) { return errore(await sb.rpc('invia_richiesta', { p_date: date, p_kind: kind, p_conferma: conferma, p_fine: fine || null })); },
     async storicoPiano(y, m) {
-      const primo = iso(y, m, 1), gen = iso(y, 1, 1), out = [];
+      const primo = iso(y, m, 1), gen = giorniPrimaDi(iso(y, 1, 1), 7), out = [];
       for (let da = 0; ; da += 1000) {
         const r = errore(await sb.from('shifts').select('staff_id,date,kind').in('kind', ['M', 'P', 'N']).gte('date', gen).lt('date', primo).order('date').range(da, da + 999));
         out.push(...r);
@@ -451,6 +455,7 @@ async function backendSupabase() {
   };
 }
 
+const giorniPrimaDi = (data, n) => { const x = new Date(`${data}T00:00:00Z`); x.setUTCDate(x.getUTCDate() - n); return x.toISOString().slice(0, 10); };
 export async function creaBackend() {
   return isDemo ? backendDemo() : backendSupabase();
 }

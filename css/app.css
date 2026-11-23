@@ -95,7 +95,7 @@ table.foglio tbody td:last-child { border-right: 2px solid var(--linea-forte); }
 table.foglio th.sun { background-color: var(--giallo); }
 table.foglio .ev-coll { background-color: var(--azzurro); }
 table.foglio th.ev-spesa { background-color: var(--arancio); }
-table.foglio .h-numeri th.extra { font-size: 10px; letter-spacing: -.02em; }
+table.foglio .h-numeri th.extra, table.foglio .h-numeri th.prima { font-size: 10px; letter-spacing: -.02em; }
 table.foglio th.extra, table.foglio td.extra { border-left: 2px solid var(--linea-forte); }
 table.foglio th.nome-th { text-align: left; padding-left: 6px; font-style: italic; font-weight: 800; }
 table.foglio th.nome { text-align: left; padding: 0 6px; font-weight: 600; font-size: 13px; background: #fff; letter-spacing: .02em; }

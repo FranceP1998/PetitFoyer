@@ -35,6 +35,6 @@ td.notte-fine .dr ~ sub.req.fine-notte { bottom: .4mm; }
 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 table.foglio tr.mia th.nome { background: #fff; }
 
-table.foglio .h-numeri th.extra { font-size: 6.5pt; letter-spacing: -.02em; }
+table.foglio .h-numeri th.extra, table.foglio .h-numeri th.prima { font-size: 6.5pt; letter-spacing: -.02em; }
 td.prot::after { display: none !important; }
 #consensi { display: none !important; }

@@ -79,8 +79,8 @@ export function weekendPredefinito(staff, year, month, shifts) {
   const out = [];
   const giorniMese = new Date(Date.UTC(year, month, 0)).getUTCDate();
   for (const p of staff.filter((x) => x.senza_weekend && x.active !== false)) {
-    for (let g = 1; g <= giorniMese; g++) {
-      const d = `${year}-${String(month).padStart(2, '0')}-${String(g).padStart(2, '0')}`;
+    for (let g = 0; g <= giorniMese + 1; g++) {            // anche l'ultimo giorno del mese prima e il 1° del mese dopo (colonne ai lati del foglio)
+      const d = new Date(Date.UTC(year, month - 1, g)).toISOString().slice(0, 10);
       const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
       if (dow !== 0 && dow !== 6) continue;
       if (p.start_date && d < p.start_date) continue;

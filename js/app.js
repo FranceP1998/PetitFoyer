@@ -1,6 +1,6 @@
 import { creaBackend } from './data.js';
 import { CONFIG } from './config.js';
-import { renderGrid, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from './grid.js';
+import { renderGrid, meseDopo, righeLegenda, nomeMese, pad, eProtetta, tracciaNotti } from './grid.js';
 import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
@@ -129,7 +129,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v26`;
+  $('utente').textContent = `${stato.utente.name} · v28`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -545,6 +545,15 @@ const genVista = (v) => {
 };
 const genErrore = (t) => { $('gn-err').textContent = t; $('gn-err').hidden = !t; };
 const genModo = () => document.querySelector('input[name="gn-modo"]:checked').value;
+// Giorni su cui lavora il generatore: il mese e il 1° del mese dopo (anticipo), salvo che il mese dopo sia già pubblicato.
+async function ambitoGenerazione(y, m) {
+  const dopo = meseDopo(y, m);
+  let bloccato = false;
+  try { bloccato = (await stato.be.caricaMese(dopo.y, dopo.m)).month.status === 'published'; } catch { bloccato = false; }
+  const primo = `${y}-${pad(m)}-01`, ultimo = bloccato ? `${y}-${pad(m)}-${pad(new Date(y, m, 0).getDate())}` : `${dopo.y}-${pad(dopo.m)}-01`;
+  const righe = stato.dati.shifts.filter((s) => s.date >= primo && s.date <= ultimo);
+  return { primo, ultimo, righe, bloccato, dopo };
+}
 $('btn-genera').onclick = () => {
   if (stato.dati.month.status === 'published') { alert('Il mese è pubblicato: riportalo in bozza prima di generare un nuovo piano.'); return; }
   genPiano = null;
@@ -560,17 +569,16 @@ $('dlg-genera').addEventListener('cancel', (ev) => { if (!$('gn-calcolo').hidden
 $('gn-avvia').onclick = async () => {
   const modo = genModo();
   const { year: y, month: m } = { year: stato.y, month: stato.m };
-  const primo = `${y}-${pad(m)}-01`, ultimo = `${y}-${pad(m)}-${pad(new Date(y, m, 0).getDate())}`;
-  const delMese = stato.dati.shifts.filter((s) => s.date >= primo && s.date <= ultimo);
+  const { righe: delMese, bloccato } = await ambitoGenerazione(y, m);
   const daCancellare = delMese.filter((s) => ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested).length;
-  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}. Ferie, permessi, richieste accettate e malattie restano. Continuare?`)) return;
+  if (modo === 'tutto' && daCancellare && !confirm(`Verranno cancellati ${daCancellare} turni e riposi già scritti in ${nomeMese(m).toLowerCase()}${bloccato ? '' : ' e nel 1° giorno del mese dopo'}. Ferie, permessi, richieste accettate e malattie restano. Continuare?`)) return;
   genVista('calcolo');
   $('gn-tempo').textContent = '0%';
   try {
     const sto = calcolaStorico(await stato.be.storicoPiano(y, m), y, m);
-    const dati = { year: y, month: m, staff: stato.dati.staff, shifts: delMese, prima: sto.prima, storico: sto.storico, weekendPrima: sto.weekendPrima, modalita: modo };
+    const dati = { year: y, month: m, staff: stato.dati.staff, shifts: delMese, prima: sto.prima, storico: sto.storico, weekendStorico: sto.weekendStorico, doppieStorico: sto.doppieStorico, anticipoBloccato: bloccato, modalita: modo };
     genPiano = await generaPiano(dati, { tempo: DEFAULT_TEMPO, risolvi: window.__risolviTest, progresso: (f) => { $('gn-tempo').textContent = `${Math.min(99, Math.round(f * 100))}%`; } });
-    genPiano.modo = modo;
+    genPiano.modo = modo; genPiano.bloccato = bloccato;
     genMostra();
   } catch (e) {
     genPiano = null; genVista('scelta'); genErrore(messaggio(e));
@@ -584,12 +592,16 @@ function genMostra() {
   let h = nSc
     ? `<p class="gn-ko">Attenzione: ${nSc === 1 ? '1 turno resta senza copertura giusta' : nSc + ' turni restano senza copertura giusta'}.</p><ul>${r.scoperti.map((x) => `<li>${gg(x.date)} ${nomeTurno[x.kind]}: ${x.persone ? x.persone + ' persone' : 'nessuno'}</li>`).join('')}</ul>`
     : '<p class="gn-ok">Tutti i turni sono coperti, uno per turno.</p>';
-  h += '<table><thead><tr><th>Operatore</th><th>M</th><th>P</th><th>N</th><th>Totale</th><th>Weekend liberi</th></tr></thead><tbody>';
-  for (const p of r.persone) h += `<tr><td>${p.nome}${p.fisso ? ' (fisso)' : ''}</td><td>${p.M}</td><td>${p.P}</td><td>${p.N}</td><td>${p.totale}</td><td>${p.weekendLiberi === null ? '–' : p.weekendLiberi}</td></tr>`;
+  h += '<table><thead><tr><th>Operatore</th><th>M</th><th>P</th><th>N</th><th>Totale</th><th title="Sabato e domenica entrambi liberi">Weekend liberi</th><th title="Un solo giorno del weekend di lavoro">Weekend con 1 giorno libero</th><th title="Sabato e domenica entrambi di lavoro">Weekend lavorati</th></tr></thead><tbody>';
+  for (const p of r.persone) h += `<tr><td>${p.nome}${p.fisso ? ' (fisso)' : ''}</td><td>${p.M}</td><td>${p.P}</td><td>${p.N}</td><td>${p.totale}</td><td>${p.weekendLiberi ?? '–'}</td><td>${p.weekendMezzi ?? '–'}</td><td>${p.weekendPieni ?? '–'}</td></tr>`;
   h += '</tbody></table>';
   h += r.problemi.length
     ? `<p><b>Regole non rispettate (il minimo indispensabile):</b></p><ul>${r.problemi.map((x) => `<li>${x}</li>`).join('')}</ul>`
     : '<p class="gn-ok">Nessuna regola obbligatoria violata.</p>';
+  if (r.anticipo) {
+    const a = r.anticipo, n = (x) => x || 'nessuno';
+    h += `<p class="muted">Anticipo sul mese dopo, ${gg(a.data)}: mattina ${n(a.M)}, pomeriggio ${n(a.P)}, notte ${n(a.N)}.</p>`;
+  } else h += '<p class="muted">Il mese dopo è già pubblicato: il suo primo giorno non viene toccato.</p>';
   const dop = r.persone.reduce((a, p) => a + p.doppie, 0);
   if (dop) h += `<p class="muted">Doppie notti: ${dop}.</p>`;
   if (genPiano.modello.info.conflitti.length) h += '<p class="gn-ko">Alcune caselle già fissate si contraddicono tra loro: controlla il piano dopo averlo applicato.</p>';
@@ -605,6 +617,19 @@ $('gn-applica').onclick = async () => {
     $('dlg-genera').close(); genPiano = null;
     await carica();
   } catch (e) { genErrore(messaggio(e)); } finally { $('gn-applica').disabled = false; }
+};
+
+
+// ------------------------------------------------------------ pulisci calendario (coordinatrice)
+$('btn-pulisci').onclick = async () => {
+  if (stato.dati.month.status === 'published') { alert('Il mese è pubblicato: riportalo in bozza prima di pulirlo.'); return; }
+  const y = stato.y, m = stato.m;
+  const { righe: delMese } = await ambitoGenerazione(y, m);
+  const malati = new Set(delMese.filter((s) => s.kind === 'MU').map((s) => `${s.staff_id}|${s.date}`));
+  const n = delMese.filter((s) => ['M', 'P', 'N', 'R'].includes(s.kind) && !s.requested && !malati.has(`${s.staff_id}|${s.date}`)).length;
+  if (!n) { alert('Non c\'è niente da cancellare: in questo mese ci sono solo caselle protette.'); return; }
+  if (!confirm(`Cancello ${n} turni e riposi di ${nomeMese(m).toLowerCase()} ${y} (compreso il 1° giorno del mese dopo, se non è pubblicato)?\n\nRestano ferie, permessi, riposi richiesti, richieste accettate, malattie, 10-18, coperture e collettivi.`)) return;
+  try { await stato.be.scriviPiano(y, m, [], true); await carica(); } catch (e) { alert(messaggio(e)); }
 };
 
 // ------------------------------------------------------------ le ferie della coordinatrice
