@@ -426,24 +426,39 @@ export function riepilogo(m, sol) {
 const HIGHS_BASE = 'https://cdn.jsdelivr.net/npm/highs@1.8.0/build/';
 
 export function risolviNelBrowser(lp, { tempo = DEFAULT_TEMPO } = {}) {
+  // Il solver in WebAssembly può cadere con certe opzioni: si prova una serie di impostazioni, dalla più completa alla più
+  // semplice, ognuna con un solver nuovo (dopo un errore quello vecchio non è più affidabile). Si usa la prima che funziona.
   const sorgente = `
     self.onmessage = async (ev) => {
-      try {
-        importScripts('${HIGHS_BASE}highs.js');
-        const fabbrica = (typeof Module === 'function' ? Module : (typeof Highs === 'function' ? Highs : (typeof highs === 'function' ? highs : null)));
-        if (!fabbrica) throw new Error('Caricamento del solver non riuscito.');
-        const highs = await fabbrica({ locateFile: (f) => '${HIGHS_BASE}' + f });
-        const sol = highs.solve(ev.data.lp, { time_limit: ev.data.tempo, mip_rel_gap: 0.001, mip_abs_gap: 5, mip_heuristic_effort: 0.3, random_seed: Math.floor(Math.random() * 1000), threads: 1 });
-        const valori = {};
-        for (const [nome, c] of Object.entries(sol.Columns || {})) valori[nome] = c.Primal;
-        self.postMessage({ ok: true, stato: sol.Status, valori });
-      } catch (e) { self.postMessage({ ok: false, errore: String(e && e.message || e) }); }
+      const errori = [];
+      try { importScripts('${HIGHS_BASE}highs.js'); } catch (e) { self.postMessage({ ok: false, errore: 'Caricamento del solver non riuscito: ' + (e && e.message || e) }); return; }
+      const fabbrica = (typeof Module === 'function' ? Module : (typeof Highs === 'function' ? Highs : (typeof highs === 'function' ? highs : null)));
+      if (!fabbrica) { self.postMessage({ ok: false, errore: 'Caricamento del solver non riuscito.' }); return; }
+      const t = ev.data.tempo;
+      const tentativi = [
+        { nome: 'standard', opz: { time_limit: t, mip_rel_gap: 0.01 } },
+        { nome: 'senza presolve', opz: { time_limit: t, mip_rel_gap: 0.01, presolve: 'off' } },
+        { nome: 'minimo', opz: { time_limit: t } },
+        { nome: 'minimo senza presolve', opz: { time_limit: t, presolve: 'off' } },
+      ];
+      for (const tent of tentativi) {
+        try {
+          const highs = await fabbrica({ locateFile: (f) => '${HIGHS_BASE}' + f });
+          const sol = highs.solve(ev.data.lp, tent.opz);
+          const valori = {};
+          for (const [nome, c] of Object.entries(sol.Columns || {})) valori[nome] = c.Primal;
+          if (!Object.keys(valori).length) { errori.push(tent.nome + ': nessun piano (' + sol.Status + ')'); continue; }
+          self.postMessage({ ok: true, stato: sol.Status, valori, tentativo: tent.nome, errori });
+          return;
+        } catch (e) { errori.push(tent.nome + ': ' + String(e && e.message || e)); }
+      }
+      self.postMessage({ ok: false, errore: errori.join(' | ') });
     };`;
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(new Blob([sorgente], { type: 'application/javascript' }));
     const w = new Worker(url);
     const chiudi = () => { w.terminate(); URL.revokeObjectURL(url); };
-    const guardia = setTimeout(() => { chiudi(); reject(new Error('Il calcolo ha impiegato troppo tempo.')); }, (tempo + 90) * 1000);
+    const guardia = setTimeout(() => { chiudi(); reject(new Error('Il calcolo ha impiegato troppo tempo.')); }, (tempo * 4 + 60) * 1000);
     w.onmessage = (ev) => { clearTimeout(guardia); chiudi(); ev.data.ok ? resolve(ev.data) : reject(new Error(ev.data.errore)); };
     w.onerror = (ev) => { clearTimeout(guardia); chiudi(); reject(new Error('Impossibile avviare il solver (rete assente?): ' + (ev.message || ''))); };
     w.postMessage({ lp, tempo });
