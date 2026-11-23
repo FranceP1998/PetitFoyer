@@ -287,6 +287,11 @@ security definer
 set search_path = public
 as $$
 begin
+  -- le ferie e i permessi della coordinatrice sono suoi: li sposta e li toglie da sola, senza consenso di nessuno
+  if public.is_coordinator() and old.staff_id = public.mia_persona() then
+    if tg_op = 'DELETE' then return old; end if;
+    return new;
+  end if;
   if public.is_protected_row(old.kind, old.requested) then
     -- se cambiano solo gli orari di un turno M/P/N (es. copertura di una malattia) non serve il consenso
     if tg_op = 'UPDATE' and old.kind in ('M','P','N') and new.kind = old.kind
@@ -1160,13 +1165,33 @@ begin
 end;
 $$;
 
+-- Le ferie (o i permessi) della coordinatrice: le segna lei stessa, senza richiesta né approvazione.
+-- Valgono le stesse regole di blocco delle ferie degli operatori (giorno già occupato, periodo troppo lungo,
+-- sabato o domenica a inizio e fine); sabati e domeniche in mezzo al periodo diventano il trattino.
+create or replace function public.mie_ferie(p_da date, p_a date, p_kind text default 'F')
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_staff bigint := public.mia_persona(); r public.requests;
+begin
+  if not public.is_coordinator() or v_staff is null then raise exception 'Solo la coordinatrice.' using errcode = '42501'; end if;
+  if p_da is null or p_a is null or p_kind not in ('F','PERM') then raise exception 'Richiesta non valida.' using errcode = '22023'; end if;
+  perform pg_advisory_xact_lock(hashtext('richieste'));
+  perform public.controlla_ferie(v_staff, p_da, p_a, null);        -- solleva l'errore se qualcosa blocca; gli avvisi non servono
+  r.staff_id := v_staff; r.date := p_da; r.last_date := p_a; r.kind := p_kind;
+  perform public.applica_richiesta(r);
+end;
+$$;
+
 -- (niente più apertura manuale da parte di Marie)
 drop function if exists public.imposta_richieste(int, int, boolean);
 
 revoke all on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean, date), public.annulla_richiesta(bigint),
-  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze() from public;
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.mie_ferie(date, date, text) from public;
 grant execute on function public.mesi_richieste(), public.invia_richiesta(date, text, boolean, date), public.annulla_richiesta(bigint),
-  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze() to authenticated;
+  public.rispondi_richiesta(bigint, boolean, text), public.elabora_scadenze(), public.mie_ferie(date, date, text) to authenticated;
 
 -- Tutti i membri del personale vedono tutte le richieste
 alter table public.requests enable row level security;

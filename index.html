@@ -76,6 +76,7 @@
         <button id="btn-eventi" class="solo-coord" hidden>Eventi del mese</button>
         <button id="btn-pubblica" class="solo-coord" hidden>Pubblica</button>
         <button id="btn-richieste">Richieste</button>
+        <button id="btn-mie-ferie" class="solo-coord" hidden>Le mie ferie</button>
         <button id="btn-malattia" class="solo-op" hidden>Comunica malattia</button>
         <button id="btn-pdf" class="primario">Salva PDF</button>
         <button id="btn-notifiche" class="campana" type="button" aria-label="Notifiche" aria-haspopup="true" aria-expanded="false">
@@ -165,6 +166,21 @@
     <p id="ric-err" class="err" role="alert" hidden></p>
     <ul id="ric-lista" class="personale-lista ric-lista"></ul>
     <div class="dlg-azioni"><span class="spazio"></span><button type="button" id="ric-chiudi">Chiudi</button></div>
+  </dialog>
+
+  <!-- Le ferie della coordinatrice -->
+  <dialog id="dlg-mie-ferie" class="no-print">
+    <h2>Le mie ferie</h2>
+    <p class="muted">Scegli il primo e l'ultimo giorno: le ferie si segnano da sole, senza approvazione. I sabati e le domeniche in mezzo diventano il trattino al posto della R. Per toglierle, apri le singole caselle con <i>Modifica</i>.</p>
+    <div class="campi">
+      <label>Che cosa
+        <select id="mf-tipo"><option value="F">Ferie</option><option value="PERM">Permesso</option></select>
+      </label>
+      <label>Primo giorno<input id="mf-da" type="date"></label>
+      <label>Ultimo giorno (compreso)<input id="mf-a" type="date"></label>
+    </div>
+    <p id="mf-err" class="err" role="alert" hidden></p>
+    <div class="dlg-azioni"><button type="button" class="primario" id="mf-ok">Segna</button><span class="spazio"></span><button type="button" id="mf-chiudi">Chiudi</button></div>
   </dialog>
 
   <!-- Comunica malattia (operatore) -->

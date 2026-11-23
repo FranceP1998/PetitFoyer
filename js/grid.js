@@ -82,7 +82,7 @@ export function righeLegenda(events, y, m, shifts = []) {
   return out;
 }
 
-export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0, editable = false, evidenzia = null }) {
+export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0, editable = false, evidenzia = null, senzaBlocco = null }) {
   const nGiorni = giorniDelMese(year, month);
   const next = meseDopo(year, month);
   const idx = indicizza(shifts);
@@ -142,7 +142,7 @@ export function renderGrid({ year, month, staff, shifts, events, righeVuote = 0,
       const prevIso = new Date(Date.UTC(c.yy, c.mm - 1, c.dd - 1)).toISOString().slice(0, 10);
       const notteFinisce = notteFinisceDa(get(p.id, prevIso));
       const d = descriviCella(kinds, notteFinisce, muDaIeri(get(p.id, prevIso)), deltaFineNotte(get(p.id, prevIso)), notteRichiestaDa(get(p.id, prevIso)));
-      const protCls = editable && kinds.some((e) => eProtetta(e) && !e.pending) ? ' prot' : '';
+      const protCls = editable && p.id !== senzaBlocco && kinds.some((e) => eProtetta(e) && !e.pending) ? ' prot' : '';
       // richieste in attesa: si segna solo la casella interessata (una notte: in basso il giorno d'inizio e in alto il giorno dopo, dove finisce)
       const ieri = get(p.id, prevIso);
       const attM = kinds.filter((e) => e.pending && e.kind === 'M').concat(ieri.filter((e) => e.pending && e.kind === 'N'));

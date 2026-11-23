@@ -128,7 +128,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v21`;
+  $('utente').textContent = `${stato.utente.name} · v22`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -227,6 +227,7 @@ function disegna() {
     year: stato.y, month: stato.m, staff, shifts: [...conRichieste, ...weekendPredefinito(staff, stato.y, stato.m, conRichieste)], events,
     editable: isCoord() && stato.modifica,
     evidenzia: isCoord() ? null : stato.utente.staffId,          // gli operatori vedono la propria riga riquadrata in blu
+    senzaBlocco: isCoord() ? stato.utente.staffId : null,        // le ferie della coordinatrice non hanno bisogno di consenso
   });
   $('foglio').classList.toggle('modificabile', isCoord() && stato.modifica);
   ridisegnaNotti();
@@ -532,6 +533,24 @@ $('malattie').addEventListener('click', async (ev) => {
 // ------------------------------------------------------------ malattia: comunicazione dell'operatore
 function malErrore(t) { $('ml-err').textContent = t || ''; $('ml-err').hidden = !t; }
 function malReset() { $('ml-anteprima').innerHTML = ''; malErrore(''); $('ml-conferma').hidden = true; $('ml-controlla').hidden = false; }
+// ------------------------------------------------------------ le ferie della coordinatrice
+$('btn-mie-ferie').onclick = () => {
+  const oggi = oggiIso();
+  $('mf-da').value = oggi; $('mf-a').value = ''; $('mf-tipo').value = 'F'; $('mf-err').hidden = true;
+  $('dlg-mie-ferie').showModal();
+};
+$('mf-chiudi').onclick = () => $('dlg-mie-ferie').close();
+$('mf-ok').onclick = async () => {
+  const da = $('mf-da').value, a = $('mf-a').value || da;
+  if (!da) { $('mf-err').textContent = 'Scrivi il primo giorno.'; $('mf-err').hidden = false; return; }
+  try {
+    await stato.be.mieFerie(da, a, $('mf-tipo').value);
+    $('dlg-mie-ferie').close();
+    stato.y = +da.slice(0, 4); stato.m = +da.slice(5, 7);
+    await carica();
+  } catch (e) { $('mf-err').textContent = messaggio(e); $('mf-err').hidden = false; }
+};
+
 $('btn-malattia').onclick = () => { $('ml-da').value = oggiIso(); $('ml-a').value = ''; malReset(); $('dlg-malattia').showModal(); };
 $('ml-da').onchange = malReset; $('ml-a').onchange = malReset;
 $('ml-chiudi').onclick = async () => { $('dlg-malattia').close(); await carica(); };
@@ -589,7 +608,7 @@ function apriCella(staffId, data) {
   const protette = esistenti.filter(eProtetta);
   const sblocco = stato.sblocchi.find((s) => s.staff_id === staffId && s.date === data && valido(s));
   const attesa = stato.sblocchi.find((s) => s.staff_id === staffId && s.date === data && s.status === 'pending');
-  const bloccata = protette.length > 0 && !sblocco;
+  const bloccata = protette.length > 0 && !sblocco && !(isCoord() && staffId === stato.utente.staffId);
   cellaCorrente = { staffId, data, esistenti, bloccata, sblocco, protetti: new Set(protette.map((e) => e.kind)), scelti: new Set(esistenti.map((e) => e.kind)) };
 
   $('cella-titolo').textContent = `${p.name} — ${dataEstesa(data)}`;

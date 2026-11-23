@@ -168,6 +168,15 @@ function backendDemo() {
       }
       salva(); return r.id;
     },
+    // ferie e permessi della coordinatrice: le segna lei, senza approvazione
+    async mieFerie(da, a, kind = 'F') {
+      const u = utente();
+      controllaFerie(db, u.staffId, da, a);
+      const persona = db.staff.find((x) => x.id === u.staffId);
+      db.shifts = db.shifts.filter((s) => !(s.staff_id === u.staffId && s.kind === 'R' && s.date >= da && s.date <= a));
+      for (const g of giorniAssenza(da, a, kind, persona)) db.shifts.push({ id: nextId++, staff_id: u.staffId, date: g.date, kind: g.kind, requested: false, start_time: null, end_time: null });
+      salva();
+    },
     async annullaRichiesta(id) {
       const r = (db.richieste || []).find((x) => x.id === id && x.status === 'pending' && x.staff_id === utente().staffId);
       if (r) { r.status = 'cancelled'; salva(); }
@@ -210,7 +219,7 @@ function backendDemo() {
       const nuovo = new Map(voci.map((v) => [v.kind, firma(v)]));
       // da togliere: voci sparite o con la spunta "richiesto" / gli orari cambiati
       const daTogliere = esistenti.filter((e) => !nuovo.has(e.kind) || nuovo.get(e.kind) !== firma(e));
-      if (daTogliere.some((e) => PROTETTI.includes(e.kind) || e.requested) && !sbloccoValido(staffId, data)) {
+      if (daTogliere.some((e) => PROTETTI.includes(e.kind) || e.requested) && !sbloccoValido(staffId, data) && !(utente().role === 'coordinator' && staffId === utente().staffId)) {
         throw new Error('Casella protetta (ferie, permesso o richiesta accettata): serve il consenso dell\'operatore.');
       }
       const tolti = new Set(daTogliere);
@@ -402,6 +411,7 @@ async function backendSupabase() {
     },
     async elaboraScadenze() { return errore(await sb.rpc('elabora_scadenze')); },
     async inviaRichiesta(date, kind, conferma = false, fine = null) { return errore(await sb.rpc('invia_richiesta', { p_date: date, p_kind: kind, p_conferma: conferma, p_fine: fine || null })); },
+    async mieFerie(da, a, kind = 'F') { errore(await sb.rpc('mie_ferie', { p_da: da, p_a: a, p_kind: kind })); },
     async annullaRichiesta(id) { errore(await sb.rpc('annulla_richiesta', { p_id: id })); },
     async rispondiRichiesta(id, accetta, motivo = '') { errore(await sb.rpc('rispondi_richiesta', { p_id: id, p_accetta: accetta, p_motivo: motivo || null })); },
     async aggiungiEvento(e) { errore(await sb.from('events').insert(e)); },
