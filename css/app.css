@@ -315,3 +315,16 @@ table.foglio td.in-attesa.critica { outline-color: #b58900; background-color: #f
 .fe-rinomina { display: block; width: 100%; margin-top: 3px; padding: 6px 8px; border: 1px solid transparent; border-bottom-color: #c9c7c0; border-radius: 6px; font-size: 14px; background: transparent; }
 .fe-rinomina:hover, .fe-rinomina:focus { border-color: #c9c7c0; background: #fff; }
 .fe-titolo { display: grid; text-align: center; } .fe-titolo small { color: #6b6a64; }
+
+/* cambi turno */
+#dlg-scambi h3 { margin: 14px 0 4px; font-size: 15px; }
+.sc-lista { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 6px; }
+.sc-lista li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid #e4e2db; border-radius: 10px; font-size: 14px; }
+.sc-lista li small { display: block; color: #6b6a64; }
+.sc-lista .sc-az { display: flex; gap: 6px; flex-shrink: 0; }
+.sc-avvisi { margin: 8px 0; font-size: 14px; }
+.sc-avvisi .sc-ok { color: #2e6b3a; }
+.sc-avvisi .sc-ko { color: #8a1f1f; }
+.sc-avvisi ul { margin: 4px 0 0 18px; padding: 0; color: #8a5a00; }
+.sc-forza { display: flex; gap: 8px; align-items: center; font-size: 14px; margin: 6px 0; }
+@media (max-width: 560px) { .sc-lista li { flex-direction: column; align-items: stretch; } }

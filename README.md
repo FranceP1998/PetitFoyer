@@ -127,3 +127,18 @@ assets/logo.png       (facoltativo) logo da mettere in testa al foglio a schermo
 ## Personalizzare la grafica
 Colori e spessori sono in `:root` di `css/app.css`. Per mettere il logo della Libellula salva
 un file `assets/logo.png`: compare in testa al foglio a schermo (nel PDF per ora c'è solo il nome della cooperativa).
+
+## Cambi turno
+
+Un cambio è sempre uno **scambio**: chi propone cede un turno e il collega ne cede un altro (niente regali senza restituzione).
+
+- Si cambiano solo turni mattina/pomeriggio/notte di mesi **già pubblicati**, **da oggi in poi**, senza orari personalizzati e senza turno di mutua soccorso.
+- Massimo **4 cambi effettivi al mese** a testa (contano per entrambi gli operatori).
+- Il collega non può ricevere il turno se quel giorno ha ferie, permesso, riposo richiesto, 10-18 o mutua soccorso.
+- Le altre regole (riposo dopo la notte, 11 ore, ecc.) vengono mostrate come **avvisi**: si possono saltare spuntando «Invio comunque, siamo d'accordo».
+- Quando il collega accetta il cambio vale **subito**; Marie riceve la notifica (la mail arriverà con le notifiche email). I riposi vengono ricalcolati.
+- I turni richiesti si possono scambiare e diventano turni normali; il flag festivo viaggia con il turno.
+- In modalità demo, il menù «Vedi come» permette di provare con Domenico, Anna, Frederic, Stella, Aurora.
+- Non ancora fatti: allungamenti di turno (non reciproci, con ore contate).
+
+Dopo l'aggiornamento: rieseguire `supabase/schema.sql` nel SQL Editor (nuova tabella `swaps` e funzioni dei cambi).

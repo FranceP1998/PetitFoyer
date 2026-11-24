@@ -5,7 +5,8 @@ import { CONFIG } from './config.js';
 import { DEMO } from './demo-data.js';
 import { iso, pad, giorniDelMese, meseDopo, PROTETTI } from './grid.js';
 import { giorniMalattia } from './mutua.js';
-import { controllaRegole, controllaFerie, giorniAssenza, MAX_RICHIESTE, richiesteAperte, mesiConRichieste } from './richieste.js';
+import { validaScambio, avvisiScambio, applicaScambio, descrTurno } from './scambi.js';
+import { controllaRegole, controllaFerie, giorniAssenza, MAX_RICHIESTE, richiesteAperte, mesiConRichieste, oggiRoma } from './richieste.js';
 
 export const isDemo = !(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
 
@@ -40,7 +41,8 @@ function backendDemo() {
   let nextId = Math.max(1000, ...db.shifts.map((s) => s.id || 0), ...db.events.map((e) => e.id || 0)) + 1;
 
   const utente = () => {
-    const cerca = ruolo === 'coordinator' ? (s) => s.role === 'coordinator' : (s) => s.name === 'Domenico';
+    // "coordinator", "operator" (Domenico) oppure "op:<id>" per provare i cambi turno con un altro operatore
+    const cerca = ruolo === 'coordinator' ? (s) => s.role === 'coordinator' : ruolo.startsWith('op:') ? (s) => s.id === +ruolo.slice(3) : (s) => s.name === 'Domenico';
     const s = db.staff.find(cerca);
     return { staffId: s.id, name: s.name, role: s.role };
   };
@@ -252,6 +254,60 @@ function backendDemo() {
       for (const v of voci) if (!rimasti.has(v.kind)) db.shifts.push({ id: nextId++, staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null });
       salva();
     },
+    // --- cambi turno (demo: stesse regole del database, in js/scambi.js) ---
+    async turniScambiabili() {
+      const oggi = oggiRoma();
+      return db.shifts.filter((s) => s.date >= oggi && ['M', 'P', 'N', 'MU'].includes(s.kind) && meseDemoPubblicato(s.date))
+        .map((s) => ({ staff_id: s.staff_id, date: s.date, kind: s.kind, start_time: s.start_time || null, end_time: s.end_time || null }));
+    },
+    async elencaScambi() { return [...(db.scambi || [])].sort((a, b) => b.created_at.localeCompare(a.created_at)).filter((w) => { const u = utente(); return u.role === 'coordinator' || w.from_staff === u.staffId || w.to_staff === u.staffId; }); },
+    async anteprimaScambio(a_chi, dFrom, dTo) {
+      const u = utente(); const ctx = { shifts: db.shifts, staff: db.staff, scambi: db.scambi || [], oggi: oggiRoma(), pubblicato: meseDemoPubblicato };
+      validaScambio(ctx, u.staffId, a_chi, dFrom, dTo);
+      return avvisiScambio(db.shifts, db.staff, u.staffId, a_chi, dFrom, dTo);
+    },
+    async proponiScambio(a_chi, dFrom, dTo, conferma = false) {
+      const u = utente(); db.scambi = db.scambi || []; db.notifiche = db.notifiche || [];
+      const ctx = { shifts: db.shifts, staff: db.staff, scambi: db.scambi, oggi: oggiRoma(), pubblicato: meseDemoPubblicato };
+      const k = validaScambio(ctx, u.staffId, a_chi, dFrom, dTo);
+      const av = avvisiScambio(db.shifts, db.staff, u.staffId, a_chi, dFrom, dTo);
+      if (av.length && !conferma) throw new Error('[avviso] ' + av.join('\n'));
+      const w = { id: nextId++, from_staff: u.staffId, to_staff: a_chi, date_from: dFrom, kind_from: k.k1, date_to: dTo, kind_to: k.k2, status: 'pending', avvisi: av, created_at: new Date().toISOString(), decided_at: null };
+      db.scambi.push(w);
+      db.notifiche.push({ id: nextId++, staff_id: a_chi, kind: 'scambio', created_at: new Date().toISOString(), read_at: null,
+        text: `${u.name} ti propone un cambio turno: ${u.name} cede ${descrTurno(k.k1, dFrom)} e tu cedi ${descrTurno(k.k2, dTo)}.` });
+      salva(); return w.id;
+    },
+    async annullaScambio(id) {
+      const u = utente(); const w = (db.scambi || []).find((x) => x.id === id && x.status === 'pending' && x.from_staff === u.staffId);
+      if (!w) throw new Error('Proposta non trovata o già decisa.');
+      w.status = 'cancelled'; w.decided_at = new Date().toISOString();
+      db.notifiche = db.notifiche || [];
+      db.notifiche.push({ id: nextId++, staff_id: w.to_staff, kind: 'scambio', created_at: new Date().toISOString(), read_at: null, text: `${u.name} ha annullato la proposta di cambio turno (${descrTurno(w.kind_from, w.date_from)} / ${descrTurno(w.kind_to, w.date_to)}).` });
+      salva();
+    },
+    async rispondiScambio(id, accetta) {
+      const u = utente(); const w = (db.scambi || []).find((x) => x.id === id && x.status === 'pending' && x.to_staff === u.staffId);
+      if (!w) throw new Error('Proposta non trovata o già decisa.');
+      const nome = (i) => db.staff.find((p) => p.id === i)?.name || '';
+      db.notifiche = db.notifiche || [];
+      const nota = (staff_id, text) => db.notifiche.push({ id: nextId++, staff_id, kind: 'scambio', created_at: new Date().toISOString(), read_at: null, text });
+      if (!accetta) {
+        w.status = 'rejected'; w.decided_at = new Date().toISOString();
+        nota(w.from_staff, `${u.name} ha rifiutato il cambio turno (${descrTurno(w.kind_from, w.date_from)} / ${descrTurno(w.kind_to, w.date_to)}).`);
+        salva(); return;
+      }
+      const ctx = { shifts: db.shifts, staff: db.staff, scambi: db.scambi, oggi: oggiRoma(), pubblicato: meseDemoPubblicato };
+      const k = validaScambio(ctx, w.from_staff, w.to_staff, w.date_from, w.date_to, w.id);
+      if (k.k1 !== w.kind_from || k.k2 !== w.kind_to) throw new Error('I turni sono cambiati nel frattempo: la proposta non è più valida.');
+      const av = avvisiScambio(db.shifts, db.staff, w.from_staff, w.to_staff, w.date_from, w.date_to);
+      db.shifts = applicaScambio(db.shifts, w.from_staff, w.to_staff, w.date_from, w.date_to, () => nextId++);
+      w.status = 'accepted'; w.decided_at = new Date().toISOString(); w.avvisi = av;
+      const testo = `Cambio turno fatto: ${nome(w.from_staff)} cede ${descrTurno(w.kind_from, w.date_from)} a ${nome(w.to_staff)}, ${nome(w.to_staff)} cede ${descrTurno(w.kind_to, w.date_to)} a ${nome(w.from_staff)}.${av.length ? ' Attenzione: ' + av.join('; ') + '.' : ''}`;
+      for (const c of db.staff.filter((x) => x.role === 'coordinator')) nota(c.id, testo);
+      nota(w.from_staff, `${nome(w.to_staff)} ha accettato il cambio turno: ora fai ${descrTurno(w.kind_to, w.date_to)} e ${nome(w.to_staff)} fa ${descrTurno(w.kind_from, w.date_from)}.`);
+      salva();
+    },
     // --- festività: date scelte dalla coordinatrice e turni assegnati nella riunione (fissi e sempre visibili) ---
     async elencaFestivita(da, a) {
       return {
@@ -440,6 +496,20 @@ async function backendSupabase() {
         errore(await sb.from('shifts').insert(daAggiungere.map((v) => ({ staff_id: staffId, date: data, kind: v.kind, requested: !!v.requested, start_time: v.start_time || null, end_time: v.end_time || null }))));
       }
     },
+    async turniScambiabili() {
+      const oggi = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome' }).format(new Date());
+      const r = [];
+      for (let da = 0; ; da += 1000) {
+        const x = errore(await sb.from('shifts').select('staff_id,date,kind,start_time,end_time').in('kind', ['M', 'P', 'N', 'MU']).gte('date', oggi).order('date').range(da, da + 999));
+        r.push(...x); if (x.length < 1000) break;
+      }
+      return r;   // gli operatori vedono solo i mesi pubblicati
+    },
+    async elencaScambi() { return errore(await sb.from('swaps').select('id,from_staff,to_staff,date_from,kind_from,date_to,kind_to,status,avvisi,created_at,decided_at').order('created_at', { ascending: false }).limit(80)); },
+    async anteprimaScambio(a_chi, dFrom, dTo) { return errore(await sb.rpc('anteprima_scambio', { p_to: a_chi, p_date_from: dFrom, p_date_to: dTo })) || []; },
+    async proponiScambio(a_chi, dFrom, dTo, conferma = false) { return errore(await sb.rpc('proponi_scambio', { p_to: a_chi, p_date_from: dFrom, p_date_to: dTo, p_conferma: !!conferma })); },
+    async annullaScambio(id) { errore(await sb.rpc('annulla_scambio', { p_id: id })); },
+    async rispondiScambio(id, accetta) { errore(await sb.rpc('rispondi_scambio', { p_id: id, p_accetta: !!accetta })); },
     async elencaFestivita(da, a) {
       const [giorni, turni] = await Promise.all([
         sb.from('holidays').select('date,label').gte('date', da).lte('date', a).order('date').then(errore),

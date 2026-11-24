@@ -297,6 +297,11 @@ security definer
 set search_path = public
 as $$
 begin
+  -- durante un cambio turno accettato dai due colleghi (funzione esegui_scambio) le righe si spostano senza altro consenso
+  if current_setting('app.scambio', true) = '1' then
+    if tg_op = 'DELETE' then return old; end if;
+    return new;
+  end if;
   -- le ferie e i permessi della coordinatrice sono suoi: li sposta e li toglie da sola, senza consenso di nessuno
   if public.is_coordinator() and old.staff_id = public.mia_persona() then
     if tg_op = 'DELETE' then return old; end if;
@@ -1305,6 +1310,285 @@ $$;
 
 revoke all on function public.imposta_festivita(date, text, bigint, bigint, bigint), public.togli_festivita(date) from public;
 grant execute on function public.imposta_festivita(date, text, bigint, bigint, bigint), public.togli_festivita(date) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 17. Cambi turno tra operatori
+--     Solo scambi con restituzione: A cede un turno a B e B ne cede uno ad A. B accetta o rifiuta; all'accettazione il
+--     cambio vale subito e Marie riceve la notifica. Tutte le regole (11 ore, riposo dopo la notte, giorni di fila...) si
+--     possono saltare se i due sono d'accordo: chi propone vede un avviso e può inviare comunque. Si possono cambiare solo
+--     turni M, P, N di mesi pubblicati, da oggi in poi. Massimo 4 cambi al mese per persona (contano per entrambi).
+-- ---------------------------------------------------------------------
+create table if not exists public.swaps (
+  id         bigint generated always as identity primary key,
+  from_staff bigint not null references public.staff(id) on delete cascade,     -- chi propone
+  to_staff   bigint not null references public.staff(id) on delete cascade,     -- chi riceve la proposta
+  date_from  date   not null,                                                    -- giorno del turno che cede chi propone
+  kind_from  text   not null check (kind_from in ('M','P','N')),
+  date_to    date   not null,                                                    -- giorno del turno che cede l'altro
+  kind_to    text   not null check (kind_to in ('M','P','N')),
+  status     text   not null default 'pending' check (status in ('pending','accepted','rejected','cancelled')),
+  avvisi     text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  decided_at timestamptz,
+  check (from_staff <> to_staff)
+);
+create index if not exists swaps_stato_idx on public.swaps (status, created_at);
+alter table public.swaps enable row level security;
+drop policy if exists swaps_select on public.swaps;
+create policy swaps_select on public.swaps
+  for select to authenticated
+  using (public.is_coordinator()
+         or from_staff in (select s.id from public.staff s where s.user_id = auth.uid())
+         or to_staff   in (select s.id from public.staff s where s.user_id = auth.uid()));
+revoke all on public.swaps from anon, authenticated;
+grant select on public.swaps to authenticated;
+
+create or replace function public.kind_lavoro(p_staff bigint, p_date date) returns text
+language sql stable security definer set search_path = public as $$
+  select kind from public.shifts where staff_id = p_staff and date = p_date and kind in ('M','P','N') limit 1;
+$$;
+create or replace function public.giorno_occupato(p_staff bigint, p_date date) returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.kind_lavoro(p_staff, p_date) is not null
+      or public.kind_lavoro(p_staff, p_date - 1) = 'N'
+      or exists (select 1 from public.shifts where staff_id = p_staff and date = p_date and kind = 'T1018');
+$$;
+revoke all on function public.kind_lavoro(bigint, date), public.giorno_occupato(bigint, date) from public;
+
+-- Regole non rispettate attorno a un periodo (serve solo per avvisare: nei cambi turno le regole si possono saltare)
+create or replace function public.avvisi_persona(p_staff bigint, p_da date, p_a date) returns text[]
+language plpgsql security definer set search_path = public as $$
+declare x date; k text; k1 text; a text[] := '{}'; n int;
+begin
+  for x in select generate_series(p_da - 6, p_a + 6, interval '1 day')::date loop
+    k := public.kind_lavoro(p_staff, x); k1 := public.kind_lavoro(p_staff, x + 1);
+    if k = 'P' and k1 = 'M' then a := a || ('mattina dopo un pomeriggio il ' || to_char(x + 1, 'DD/MM') || ' (meno di 11 ore)'); end if;
+    if k = 'N' then
+      if k1 in ('M','P') then a := a || ('turno subito dopo la notte il ' || to_char(x + 1, 'DD/MM')); end if;
+      if k1 is distinct from 'N' and public.kind_lavoro(p_staff, x + 2) is not null then
+        a := a || ('turno nel giorno di riposo dopo la notte il ' || to_char(x + 2, 'DD/MM'));
+      end if;
+      if k1 = 'N' and public.kind_lavoro(p_staff, x + 2) = 'N' and public.kind_lavoro(p_staff, x - 1) is distinct from 'N' then
+        a := a || ('più di due notti di fila dal ' || to_char(x, 'DD/MM'));
+      end if;
+    end if;
+    if public.giorno_occupato(p_staff, x) and not public.giorno_occupato(p_staff, x - 1) then
+      n := 1; while public.giorno_occupato(p_staff, x + n) loop n := n + 1; end loop;
+      if n > 4 then a := a || ('più di 4 giorni di fila dal ' || to_char(x, 'DD/MM')); end if;
+    end if;
+  end loop;
+  return a;
+end;
+$$;
+revoke all on function public.avvisi_persona(bigint, date, date) from public;
+
+-- Riposo obbligato (R) dopo l'ultima notte di una serie, ricalcolato attorno a un periodo
+create or replace function public.ricalcola_riposi(p_staff bigint, p_da date, p_a date) returns void
+language plpgsql security definer set search_path = public as $$
+declare d date; x date;
+begin
+  delete from public.shifts s
+   where s.staff_id = p_staff and s.kind = 'R' and not s.requested and s.date between p_da - 1 and p_a + 3
+     and not (coalesce(public.kind_lavoro(p_staff, s.date - 2), '') = 'N' and public.kind_lavoro(p_staff, s.date - 1) is distinct from 'N');
+  for d in select generate_series(p_da - 3, p_a + 1, interval '1 day')::date loop
+    if public.kind_lavoro(p_staff, d) = 'N' and public.kind_lavoro(p_staff, d + 1) is distinct from 'N' then
+      x := d + 2;
+      if not exists (select 1 from public.shifts where staff_id = p_staff and date = x
+                      and kind in ('M','P','N','R','RR','F','FS','PERM','T1018','MU')) then
+        insert into public.shifts (staff_id, date, kind, requested) values (p_staff, x, 'R', false);
+      end if;
+    end if;
+  end loop;
+end;
+$$;
+revoke all on function public.ricalcola_riposi(bigint, date, date) from public;
+
+-- Controlli che BLOCCANO un cambio (le altre regole si possono saltare). Restituisce i due turni.
+create or replace function public.valida_scambio(p_a bigint, p_b bigint, p_d1 date, p_d2 date, p_escludi bigint, out k1 text, out k2 text)
+language plpgsql security definer set search_path = public as $$
+declare v_n int; v_m date; v_chi bigint; v_nome text;
+begin
+  if p_a is null or p_b is null or p_a = p_b then raise exception 'Scegli un collega.' using errcode = '22023'; end if;
+  if (select count(*) from public.staff where id in (p_a, p_b) and role = 'operator' and active) <> 2 then
+    raise exception 'Il cambio è possibile solo tra operatori in servizio.' using errcode = '22023';
+  end if;
+  if p_d1 is null or p_d2 is null then raise exception 'Scegli i due turni.' using errcode = '22023'; end if;
+  if p_d1 < public.oggi() or p_d2 < public.oggi() then raise exception 'Si possono cambiare solo turni da oggi in poi.' using errcode = '22023'; end if;
+  if not public.is_published(p_d1) or not public.is_published(p_d2) then
+    raise exception 'Si possono cambiare solo turni di mesi già pubblicati.' using errcode = '22023';
+  end if;
+  k1 := public.kind_lavoro(p_a, p_d1); k2 := public.kind_lavoro(p_b, p_d2);
+  select name into v_nome from public.staff where id = p_a;
+  if k1 is null then raise exception '% non ha un turno il %.', v_nome, to_char(p_d1, 'DD/MM') using errcode = '22023'; end if;
+  select name into v_nome from public.staff where id = p_b;
+  if k2 is null then raise exception '% non ha un turno il %.', v_nome, to_char(p_d2, 'DD/MM') using errcode = '22023'; end if;
+  if p_d1 = p_d2 and k1 = k2 then raise exception 'Sono lo stesso turno.' using errcode = '22023'; end if;
+  if exists (select 1 from public.shifts where ((staff_id = p_a and date = p_d1) or (staff_id = p_b and date = p_d2))
+                and (kind = 'MU' or (kind in ('M','P','N') and (start_time is not null or end_time is not null)))) then
+    raise exception 'Quel turno ha una malattia o un orario particolare: non si può cambiare dall''app. Parlane con Marie.' using errcode = '22023';
+  end if;
+  -- chi riceve deve avere il giorno libero (il riposo obbligato lascia il posto; ferie, permessi e riposi richiesti no)
+  select name into v_nome from public.staff where id = p_a;
+  if exists (select 1 from public.shifts where staff_id = p_a and date = p_d2
+              and (kind in ('RR','F','FS','PERM','T1018','MU') or (kind in ('M','P','N') and p_d1 <> p_d2))) then
+    raise exception '% ha già un turno, ferie, permesso o riposo richiesto il %.', v_nome, to_char(p_d2, 'DD/MM') using errcode = '22023';
+  end if;
+  select name into v_nome from public.staff where id = p_b;
+  if exists (select 1 from public.shifts where staff_id = p_b and date = p_d1
+              and (kind in ('RR','F','FS','PERM','T1018','MU') or (kind in ('M','P','N') and p_d1 <> p_d2))) then
+    raise exception '% ha già un turno, ferie, permesso o riposo richiesto il %.', v_nome, to_char(p_d1, 'DD/MM') using errcode = '22023';
+  end if;
+  if exists (select 1 from public.swaps w where w.status = 'pending' and w.id is distinct from p_escludi
+              and ((w.from_staff = p_a and w.date_from = p_d1) or (w.to_staff = p_a and w.date_to = p_d1)
+                or (w.from_staff = p_b and w.date_from = p_d2) or (w.to_staff = p_b and w.date_to = p_d2))) then
+    raise exception 'C''è già un cambio in attesa su uno di quei turni.' using errcode = '22023';
+  end if;
+  -- massimo 4 cambi al mese per persona, nei mesi dei due giorni
+  for v_chi in select unnest(array[p_a, p_b]) loop
+    for v_m in select distinct date_trunc('month', d)::date from unnest(array[p_d1, p_d2]) d loop
+      select count(*) into v_n from public.swaps w
+       where w.status = 'accepted' and (w.from_staff = v_chi or w.to_staff = v_chi)
+         and (date_trunc('month', w.date_from)::date = v_m or date_trunc('month', w.date_to)::date = v_m);
+      if v_n >= 4 then
+        select name into v_nome from public.staff where id = v_chi;
+        raise exception '% ha già fatto 4 cambi turno a %.', v_nome, public.nome_mese(extract(month from v_m)::int) using errcode = '22023';
+      end if;
+    end loop;
+  end loop;
+end;
+$$;
+revoke all on function public.valida_scambio(bigint, bigint, date, date, bigint) from public;
+
+-- Sposta davvero i due turni (e ricalcola i riposi obbligati dei due)
+create or replace function public.esegui_scambio(p_a bigint, p_b bigint, p_d1 date, p_d2 date) returns void
+language plpgsql security definer set search_path = public as $$
+declare ra public.shifts; rb public.shifts;
+begin
+  select * into ra from public.shifts where staff_id = p_a and date = p_d1 and kind in ('M','P','N');
+  select * into rb from public.shifts where staff_id = p_b and date = p_d2 and kind in ('M','P','N');
+  perform set_config('app.scambio', '1', true);
+  delete from public.shifts where id in (ra.id, rb.id);
+  delete from public.shifts where staff_id = p_b and date = p_d1 and kind = 'R' and not requested;
+  delete from public.shifts where staff_id = p_a and date = p_d2 and kind = 'R' and not requested;
+  insert into public.shifts (staff_id, date, kind, requested, festivo) values (p_b, p_d1, ra.kind, false, ra.festivo);
+  insert into public.shifts (staff_id, date, kind, requested, festivo) values (p_a, p_d2, rb.kind, false, rb.festivo);
+  perform public.ricalcola_riposi(p_a, least(p_d1, p_d2), greatest(p_d1, p_d2));
+  perform public.ricalcola_riposi(p_b, least(p_d1, p_d2), greatest(p_d1, p_d2));
+  perform set_config('app.scambio', '', true);
+end;
+$$;
+revoke all on function public.esegui_scambio(bigint, bigint, date, date) from public;
+
+-- Avvisi nuovi che il cambio crea: prova il cambio, guarda le regole e poi annulla tutto (il blocco con eccezione torna indietro)
+create or replace function public.avvisi_scambio(p_a bigint, p_b bigint, p_d1 date, p_d2 date) returns text[]
+language plpgsql security definer set search_path = public as $$
+declare v_pre text[] := '{}'; v_post text[] := '{}'; na text; nb text; r text[]; da date := least(p_d1, p_d2); a date := greatest(p_d1, p_d2);
+begin
+  select name into na from public.staff where id = p_a;
+  select name into nb from public.staff where id = p_b;
+  select coalesce(array_agg(na || ': ' || x), '{}') into v_pre from unnest(public.avvisi_persona(p_a, da, a)) x;
+  v_pre := v_pre || coalesce((select array_agg(nb || ': ' || x) from unnest(public.avvisi_persona(p_b, da, a)) x), '{}');
+  begin
+    perform public.esegui_scambio(p_a, p_b, p_d1, p_d2);
+    select coalesce(array_agg(na || ': ' || x), '{}') into v_post from unnest(public.avvisi_persona(p_a, da, a)) x;
+    v_post := v_post || coalesce((select array_agg(nb || ': ' || x) from unnest(public.avvisi_persona(p_b, da, a)) x), '{}');
+    raise exception 'anteprima';
+  exception when raise_exception then null;
+  end;
+  select coalesce(array_agg(x), '{}') into r from unnest(v_post) x where x <> all(v_pre);
+  return r;
+end;
+$$;
+revoke all on function public.avvisi_scambio(bigint, bigint, date, date) from public;
+
+create or replace function public.descr_turno(p_kind text, p_date date) returns text language sql immutable as $$
+  select case p_kind when 'M' then 'la mattina' when 'P' then 'il pomeriggio' else 'la notte' end || ' del ' || to_char(p_date, 'DD/MM');
+$$;
+
+-- Prima di inviare: avvisi che il cambio creerebbe (nessuna modifica)
+create or replace function public.anteprima_scambio(p_to bigint, p_date_from date, p_date_to date) returns text[]
+language plpgsql security definer set search_path = public as $$
+declare v_a bigint := public.mia_persona(); k record;
+begin
+  if v_a is null then raise exception 'Accesso non valido.' using errcode = '42501'; end if;
+  select * into k from public.valida_scambio(v_a, p_to, p_date_from, p_date_to, null);
+  return public.avvisi_scambio(v_a, p_to, p_date_from, p_date_to);
+end;
+$$;
+
+create or replace function public.proponi_scambio(p_to bigint, p_date_from date, p_date_to date, p_conferma boolean default false) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare v_a bigint := public.mia_persona(); k record; v_av text[]; v_id bigint; na text;
+begin
+  if v_a is null then raise exception 'Accesso non valido.' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock(hashtext('scambi'));
+  select * into k from public.valida_scambio(v_a, p_to, p_date_from, p_date_to, null);
+  v_av := public.avvisi_scambio(v_a, p_to, p_date_from, p_date_to);
+  if cardinality(v_av) > 0 and not p_conferma then raise exception '[avviso] %', array_to_string(v_av, E'\n') using errcode = '22023'; end if;
+  insert into public.swaps (from_staff, to_staff, date_from, kind_from, date_to, kind_to, avvisi)
+    values (v_a, p_to, p_date_from, k.k1, p_date_to, k.k2, v_av) returning id into v_id;
+  select name into na from public.staff where id = v_a;
+  insert into public.notifications (staff_id, kind, text, data)
+  values (p_to, 'scambio', na || ' ti propone un cambio turno: ' || na || ' cede ' || public.descr_turno(k.k1, p_date_from) ||
+          ' e tu cedi ' || public.descr_turno(k.k2, p_date_to) || '.', jsonb_build_object('swap', v_id));
+  return v_id;
+end;
+$$;
+
+create or replace function public.annulla_scambio(p_id bigint) returns void
+language plpgsql security definer set search_path = public as $$
+declare w public.swaps; na text;
+begin
+  select * into w from public.swaps where id = p_id and status = 'pending' and from_staff = public.mia_persona();
+  if not found then raise exception 'Proposta non trovata o già decisa.' using errcode = '22023'; end if;
+  update public.swaps set status = 'cancelled', decided_at = now() where id = w.id;
+  select name into na from public.staff where id = w.from_staff;
+  insert into public.notifications (staff_id, kind, text, data)
+  values (w.to_staff, 'scambio', na || ' ha annullato la proposta di cambio turno (' || public.descr_turno(w.kind_from, w.date_from) ||
+          ' / ' || public.descr_turno(w.kind_to, w.date_to) || ').', jsonb_build_object('swap', w.id));
+end;
+$$;
+
+-- Il collega risponde. Se accetta il cambio vale subito e Marie riceve la notifica.
+create or replace function public.rispondi_scambio(p_id bigint, p_accetta boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare w public.swaps; k record; v_av text[]; na text; nb text; v_testo text;
+begin
+  perform pg_advisory_xact_lock(hashtext('scambi'));
+  select * into w from public.swaps where id = p_id and status = 'pending' and to_staff = public.mia_persona();
+  if not found then raise exception 'Proposta non trovata o già decisa.' using errcode = '22023'; end if;
+  select name into na from public.staff where id = w.from_staff;
+  select name into nb from public.staff where id = w.to_staff;
+  if not p_accetta then
+    update public.swaps set status = 'rejected', decided_at = now() where id = w.id;
+    insert into public.notifications (staff_id, kind, text, data)
+    values (w.from_staff, 'scambio', nb || ' ha rifiutato il cambio turno (' || public.descr_turno(w.kind_from, w.date_from) ||
+            ' / ' || public.descr_turno(w.kind_to, w.date_to) || ').', jsonb_build_object('swap', w.id));
+    return;
+  end if;
+  select * into k from public.valida_scambio(w.from_staff, w.to_staff, w.date_from, w.date_to, w.id);
+  if k.k1 is distinct from w.kind_from or k.k2 is distinct from w.kind_to then
+    raise exception 'I turni sono cambiati nel frattempo: la proposta non è più valida.' using errcode = '22023';
+  end if;
+  v_av := public.avvisi_scambio(w.from_staff, w.to_staff, w.date_from, w.date_to);
+  perform public.esegui_scambio(w.from_staff, w.to_staff, w.date_from, w.date_to);
+  update public.swaps set status = 'accepted', decided_at = now(), avvisi = v_av where id = w.id;
+  v_testo := 'Cambio turno fatto: ' || na || ' cede ' || public.descr_turno(w.kind_from, w.date_from) || ' a ' || nb ||
+             ', ' || nb || ' cede ' || public.descr_turno(w.kind_to, w.date_to) || ' a ' || na || '.' ||
+             case when cardinality(v_av) > 0 then ' Attenzione: ' || array_to_string(v_av, '; ') || '.' else '' end;
+  insert into public.notifications (staff_id, kind, text, data)
+  select c.id, 'scambio', v_testo, jsonb_build_object('swap', w.id)
+    from public.staff c where c.role = 'coordinator' and c.active and (c.end_date is null or c.end_date >= current_date);
+  insert into public.notifications (staff_id, kind, text, data)
+  values (w.from_staff, 'scambio', nb || ' ha accettato il cambio turno: ora fai ' || public.descr_turno(w.kind_to, w.date_to) ||
+          ' e ' || nb || ' fa ' || public.descr_turno(w.kind_from, w.date_from) || '.', jsonb_build_object('swap', w.id));
+end;
+$$;
+
+revoke all on function public.anteprima_scambio(bigint, date, date), public.proponi_scambio(bigint, date, date, boolean),
+  public.annulla_scambio(bigint), public.rispondi_scambio(bigint, boolean), public.descr_turno(text, date) from public;
+grant execute on function public.anteprima_scambio(bigint, date, date), public.proponi_scambio(bigint, date, date, boolean),
+  public.annulla_scambio(bigint), public.rispondi_scambio(bigint, boolean), public.descr_turno(text, date) to authenticated;
 
 -- (niente più apertura manuale da parte di Marie)
 drop function if exists public.imposta_richieste(int, int, boolean);

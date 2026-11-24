@@ -5,8 +5,9 @@ import { creaPdf, nomeFilePdf } from './pdf.js';
 import { proponiCopertura } from './mutua.js';
 import { etichettaScostamento, STANDARD, inServizio } from './cella.js';
 import { generaPiano, calcolaStorico, DEFAULT_TEMPO } from './generatore.js';
+import { NOME_TURNO, ORARIO_TURNO, descrTurno } from './scambi.js';
 import { festivitaPredefinite, stagioneDi, intervalloStagione, nomeStagione } from './festivita.js';
-import { scadenzaRichieste, decisioneRichieste, giornoLibero, weekendPredefinito } from './richieste.js';
+import { scadenzaRichieste, decisioneRichieste, giornoLibero, weekendPredefinito, oggiRoma } from './richieste.js';
 
 const $ = (id) => document.getElementById(id);
 const GIORNI = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
@@ -130,7 +131,7 @@ async function mostra() {
   document.body.classList.toggle('coord', isCoord());
   for (const b of document.querySelectorAll('.solo-coord')) b.hidden = !isCoord();
   for (const b of document.querySelectorAll('.solo-op')) b.hidden = isCoord();
-  $('utente').textContent = `${stato.utente.name} · v33`;
+  $('utente').textContent = `${stato.utente.name} · v34`;
   $('btn-esci').hidden = stato.be.demo;
   $('btn-password').hidden = stato.be.demo;
   await carica();
@@ -349,7 +350,7 @@ function disegnaNotifiche() {
   $('notifiche-tutte').hidden = !n;
   $('notifiche-lista').innerHTML = n
     ? stato.notifiche.map((x) => `<li><div class="pn-testo"><p>${esc(x.text)}</p><span class="muted">${esc(quando(x.created_at))}</span></div>
-        <div class="pn-az">${/^richiest/.test(x.kind) ? `<button type="button" class="link" data-apri-ric="${x.id}">Apri richieste</button>` : ''}<button type="button" class="link" data-letta="${x.id}">Letta</button></div></li>`).join('')
+        <div class="pn-az">${/^richiest/.test(x.kind) ? `<button type="button" class="link" data-apri-ric="${x.id}">Apri richieste</button>` : ''}${x.kind === 'scambio' ? `<button type="button" class="link" data-apri-sc="${x.id}">Apri cambi turno</button>` : ''}<button type="button" class="link" data-letta="${x.id}">Letta</button></div></li>`).join('')
     : '<li class="vuota">Nessuna notifica.</li>';
 }
 function posizionaPannello() {
@@ -376,6 +377,7 @@ $('notifiche-lista').addEventListener('click', async (ev) => {
   const b = ev.target.closest('button'); if (!b) return;
   if (b.dataset.letta) await segnaLette([+b.dataset.letta]);
   else if (b.dataset.apriRic) { pannelloNotifiche(false); await segnaLette([+b.dataset.apriRic]); apriRichieste(); }
+  else if (b.dataset.apriSc) { pannelloNotifiche(false); await segnaLette([+b.dataset.apriSc]); apriScambi(); }
 });
 $('notifiche-tutte').onclick = () => segnaLette(stato.notifiche.map((x) => x.id));
 
@@ -632,6 +634,114 @@ $('btn-pulisci').onclick = async () => {
   if (!confirm(`Cancello ${n} turni e riposi di ${nomeMese(m).toLowerCase()} ${y} (compreso il 1° giorno del mese dopo, se non è pubblicato)?\n\nRestano i turni del 1° giorno del mese (già stabiliti dal mese prima), le festività assegnate, ferie, permessi, riposi richiesti, richieste accettate, malattie, 10-18, coperture e collettivi.`)) return;
   try { await stato.be.scriviPiano(y, m, [], true); await carica(); } catch (e) { alert(messaggio(e)); }
 };
+
+// ------------------------------------------------------------ cambi turno
+const scSt = { turni: [], scambi: [], pronto: false };
+const GG = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
+const scEtichetta = (t) => `${GG[new Date(`${t.date}T12:00:00Z`).getUTCDay()]} ${t.date.slice(8, 10)}/${t.date.slice(5, 7)} · ${NOME_TURNO[t.kind]} ${ORARIO_TURNO[t.kind]}`;
+const scNome = (id) => stato.dati.staff.find((p) => p.id === id)?.name || '';
+const scErrore = (t) => { $('sc-err').textContent = t; $('sc-err').hidden = !t; };
+const scTurniDi = (id) => scSt.turni.filter((t) => t.staff_id === id && ['M', 'P', 'N'].includes(t.kind) && !t.start_time && !t.end_time
+  && !scSt.turni.some((m) => m.kind === 'MU' && m.staff_id === id && m.date === t.date)).sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+const scTesto = (w) => `${scNome(w.from_staff)} cede ${descrTurno(w.kind_from, w.date_from)}, ${scNome(w.to_staff)} cede ${descrTurno(w.kind_to, w.date_to)}`;
+async function scCarica() {
+  [scSt.turni, scSt.scambi] = await Promise.all([stato.be.turniScambiabili(), stato.be.elencaScambi()]);
+  scDisegna();
+}
+function scDisegna() {
+  const io = stato.utente.staffId, oggi = oggiRoma();
+  const coord = isCoord();
+  const vivo = (w) => w.date_from >= oggi && w.date_to >= oggi;
+  const arrivo = scSt.scambi.filter((w) => w.status === 'pending' && w.to_staff === io && vivo(w));
+  const miei = scSt.scambi.filter((w) => w.status === 'pending' && w.from_staff === io && vivo(w));
+  const fatti = scSt.scambi.filter((w) => w.status === 'accepted').slice(0, 12);
+  let h = '';
+  if (arrivo.length) h += `<h3>Da rispondere</h3><ul class="sc-lista">${arrivo.map((w) => `<li><div>${esc(scTesto(w))}${w.avvisi?.length ? `<small>Attenzione: ${esc(w.avvisi.join('; '))}</small>` : ''}</div><div class="sc-az"><button type="button" class="primario" data-sc-ok="${w.id}">Accetta</button><button type="button" data-sc-no="${w.id}">Rifiuta</button></div></li>`).join('')}</ul>`;
+  if (miei.length) h += `<h3>Le mie proposte in attesa</h3><ul class="sc-lista">${miei.map((w) => `<li><div>${esc(scTesto(w))}<small>in attesa della risposta di ${esc(scNome(w.to_staff))}</small></div><div class="sc-az"><button type="button" data-sc-annulla="${w.id}">Annulla</button></div></li>`).join('')}</ul>`;
+  if (fatti.length) h += `<h3>${coord ? 'Cambi fatti' : 'Cambi fatti da te'}</h3><ul class="sc-lista">${fatti.map((w) => `<li><div>${esc(scTesto(w))}${w.avvisi?.length ? `<small>Regole saltate: ${esc(w.avvisi.join('; '))}</small>` : ''}</div></li>`).join('')}</ul>`;
+  if (!h) h = '<p class="muted">Nessun cambio per ora.</p>';
+  $('sc-elenco').innerHTML = h;
+  if (coord) return;
+  // nuovo cambio
+  const miei_t = scTurniDi(io);
+  const opt = (lista) => `<option value="">Scegli…</option>${lista.map((t) => `<option value="${t.date}|${t.kind}">${esc(scEtichetta(t))}</option>`).join('')}`;
+  const prec = [$('sc-mio').value, $('sc-collega').value];
+  $('sc-mio').innerHTML = miei_t.length ? opt(miei_t) : '<option value="">Non hai turni da cambiare nei mesi pubblicati</option>';
+  const colleghi = stato.dati.staff.filter((p) => p.role === 'operator' && p.active !== false && p.id !== io);
+  $('sc-collega').innerHTML = `<option value="">Scegli…</option>${colleghi.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}`;
+  if (prec[0] && [...$('sc-mio').options].some((o) => o.value === prec[0])) $('sc-mio').value = prec[0];
+  if (prec[1]) $('sc-collega').value = prec[1];
+  scColleghiTurni();
+}
+function scColleghiTurni() {
+  const id = +$('sc-collega').value, prec = $('sc-suo').value;
+  const lista = id ? scTurniDi(id) : [];
+  $('sc-suo').innerHTML = !id ? '<option value="">Prima scegli il collega</option>'
+    : lista.length ? `<option value="">Scegli…</option>${lista.map((t) => `<option value="${t.date}|${t.kind}">${esc(scEtichetta(t))}</option>`).join('')}` : '<option value="">Nessun turno cambiabile</option>';
+  if (prec && [...$('sc-suo').options].some((o) => o.value === prec)) $('sc-suo').value = prec;
+  scAnteprima();
+}
+let scSeq = 0;
+async function scAnteprima() {
+  const seq = ++scSeq;
+  $('sc-forza').checked = false; $('sc-forza-riga').hidden = true; scErrore('');
+  $('sc-invia').disabled = true; $('sc-avvisi').innerHTML = '';
+  const mio = $('sc-mio').value, suo = $('sc-suo').value, chi = +$('sc-collega').value;
+  if (!mio || !suo || !chi) return;
+  try {
+    const av = await stato.be.anteprimaScambio(chi, mio.split('|')[0], suo.split('|')[0]);
+    if (seq !== scSeq) return;
+    scSt.avvisi = av;
+    $('sc-avvisi').innerHTML = av.length
+      ? `<div><b>Il cambio è possibile, ma non rispetta queste regole:</b><ul>${av.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`
+      : '<div class="sc-ok">Il cambio rispetta tutte le regole.</div>';
+    $('sc-forza-riga').hidden = !av.length;
+    $('sc-invia').disabled = false;
+  } catch (e) {
+    if (seq !== scSeq) return;
+    $('sc-avvisi').innerHTML = `<div class="sc-ko">${esc(messaggio(e))}</div>`;
+  }
+}
+async function apriScambi() {
+  scErrore('');
+  $('sc-nuovo').hidden = isCoord();
+  $('sc-intro').hidden = isCoord();
+  $('dlg-scambi').showModal();
+  try { await scCarica(); } catch (e) { scErrore(messaggio(e)); }
+}
+$('btn-scambi').onclick = apriScambi;
+$('sc-chiudi').onclick = () => $('dlg-scambi').close();
+$('dlg-scambi').addEventListener('close', () => { carica(); });
+$('sc-mio').onchange = scAnteprima;
+$('sc-suo').onchange = scAnteprima;
+$('sc-collega').onchange = () => { $('sc-suo').value = ''; scColleghiTurni(); };
+$('sc-invia').onclick = async () => {
+  const mio = $('sc-mio').value.split('|')[0], suo = $('sc-suo').value.split('|')[0], chi = +$('sc-collega').value;
+  if (scSt.avvisi?.length && !$('sc-forza').checked) { scErrore('Per inviare spunta «Invio comunque, siamo d\'accordo».'); return; }
+  scErrore(''); $('sc-invia').disabled = true;
+  try {
+    await stato.be.proponiScambio(chi, mio, suo, true);
+    $('sc-mio').value = ''; $('sc-suo').value = ''; $('sc-collega').value = '';
+    await scCarica();
+    stato.notifiche = await stato.be.elencaNotifiche().catch(() => stato.notifiche); disegnaNotifiche();
+  } catch (e) { scErrore(messaggio(e)); $('sc-invia').disabled = false; }
+};
+$('sc-elenco').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  scErrore('');
+  try {
+    if (b.dataset.scOk) {
+      const w = scSt.scambi.find((x) => x.id === +b.dataset.scOk);
+      if (!confirm(`Accetti il cambio? ${scTesto(w)}. Vale subito.`)) return;
+      await stato.be.rispondiScambio(+b.dataset.scOk, true);
+    } else if (b.dataset.scNo) await stato.be.rispondiScambio(+b.dataset.scNo, false);
+    else if (b.dataset.scAnnulla) await stato.be.annullaScambio(+b.dataset.scAnnulla);
+    else return;
+    await scCarica();
+    try { stato.notifiche = await stato.be.elencaNotifiche(); } catch { /* ignora */ }
+    disegnaNotifiche();
+  } catch (e) { scErrore(messaggio(e)); }
+});
 
 // ------------------------------------------------------------ festività (coordinatrice)
 const feStato = { st: 0, dati: { giorni: [], turni: [] } };
